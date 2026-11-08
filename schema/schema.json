@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "partitioning": "{table}/region={region}/date={YYYY-MM-DD}/hour={HH}/",
+  "tables": {
+    "receptions": [
+      {"name": "schema_version",  "type": "int16",              "nullable": false},
+      {"name": "reception_id",    "type": "fixed_len_binary[16]", "nullable": false},
+      {"name": "packet_hash",     "type": "fixed_len_binary[8]",  "nullable": false},
+      {"name": "observer_id",     "type": "string",             "nullable": false},
+      {"name": "region",          "type": "string",             "nullable": false},
+      {"name": "rx_time",         "type": "timestamp[us, UTC]", "nullable": false},
+      {"name": "route_type",      "type": "int8",               "nullable": false},
+      {"name": "payload_type",    "type": "int8",               "nullable": false},
+      {"name": "payload_version", "type": "int8",               "nullable": false},
+      {"name": "path_hash_size",  "type": "int8",               "nullable": false},
+      {"name": "hop_count",       "type": "int8",               "nullable": false},
+      {"name": "path_hops",       "type": "list<string>",       "nullable": false},
+      {"name": "trace_snr_db",    "type": "list<float32>",      "nullable": true},
+      {"name": "snr_db",          "type": "float32",            "nullable": true},
+      {"name": "rssi_dbm",        "type": "int16",              "nullable": true},
+      {"name": "payload_len",     "type": "int16",              "nullable": false},
+      {"name": "src_id",          "type": "string",             "nullable": true},
+      {"name": "dst_id",          "type": "string",             "nullable": true}
+    ],
+    "adverts": [
+      {"name": "schema_version", "type": "int16",              "nullable": false},
+      {"name": "reception_id",   "type": "fixed_len_binary[16]", "nullable": false},
+      {"name": "packet_hash",    "type": "fixed_len_binary[8]",  "nullable": false},
+      {"name": "observer_id",    "type": "string",             "nullable": false},
+      {"name": "region",         "type": "string",             "nullable": false},
+      {"name": "rx_time",        "type": "timestamp[us, UTC]", "nullable": false},
+      {"name": "pubkey",         "type": "string",             "nullable": false},
+      {"name": "name",           "type": "string",             "nullable": true},
+      {"name": "role",           "type": "int8",               "nullable": false},
+      {"name": "advert_time",    "type": "timestamp[s, UTC]",  "nullable": false},
+      {"name": "lat",            "type": "float64",            "nullable": true},
+      {"name": "lon",            "type": "float64",            "nullable": true}
+    ]
+  }
+}
