@@ -1,0 +1,46 @@
+[project]
+name = "meshtwin-analytics"
+version = "0.1.0"
+description = "MeshTwin analytics: topology inference and resilience over observer Parquet"
+readme = "README.md"
+authors = [
+    { name = "Kian Bayzid", email = "134166704+kianbayzid@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=2.0.0",
+    "networkx>=3.7",
+    "numpy>=2.5.4",
+    "pyarrow>=26.0.1",
+]
+
+[project.scripts]
+meshtwin-analytics = "meshtwin_analytics.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pyarrow-stubs>=20.0.0.20260819",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+    "types-networkx>=3.6.1.20261108",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF", "N"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+python_version = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

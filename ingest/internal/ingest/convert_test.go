@@ -87,6 +87,14 @@ func TestConvertRejects(t *testing.T) {
 	}{
 		{"status topic", "meshcore/SEA/" + obsKey + "/status", nil, ErrBadTopic},
 		{"short key", "meshcore/SEA/ABCD/packets", nil, ErrBadTopic},
+		{"region with colon", "meshcore/X:Y/" + obsKey + "/packets", nil, ErrBadTopic},
+		{"region dot-dot", "meshcore/../" + obsKey + "/packets", nil, ErrBadTopic},
+		{"region punctuation", "meshcore/sea!/" + obsKey + "/packets", nil, ErrBadTopic},
+		{"region empty", "meshcore//" + obsKey + "/packets", nil, ErrBadTopic},
+		{"region one char", "meshcore/S/" + obsKey + "/packets", nil, ErrBadTopic},
+		{"region non-ASCII", "meshcore/SÉA/" + obsKey + "/packets", nil, ErrBadTopic},
+		{"region long s", "meshcore/ſea/" + obsKey + "/packets", nil, ErrBadTopic}, // U+017F upper-cases to ASCII S
+		{"region too long", "meshcore/ABCDEFGHI/" + obsKey + "/packets", nil, ErrBadTopic},
 		{"tx direction", topic, map[string]any{"direction": "tx"}, ErrNotPacket},
 		{"status type", topic, map[string]any{"type": "STATUS"}, ErrNotPacket},
 		{"raw not hex", topic, map[string]any{"raw": "XYZ"}, ErrDecode},
@@ -99,6 +107,17 @@ func TestConvertRejects(t *testing.T) {
 	}
 	if _, err := Convert(replay.Record{Topic: topic, Payload: []byte("{")}); !errors.Is(err, ErrBadJSON) {
 		t.Errorf("bad JSON: err = %v", err)
+	}
+}
+
+func TestConvertRegion(t *testing.T) {
+	// NUL is accepted on purpose: it only ever appears as "region=NUL", which is
+	// not a Windows device name; LocalStore's filepath.IsLocal is the backstop.
+	for in, want := range map[string]string{"test": "TEST", "sea": "SEA", "NUL": "NUL"} {
+		res, err := Convert(msgRecord(t, "meshcore/"+in+"/"+obsKey+"/packets", nil))
+		if err != nil || res.Reception.Region != want {
+			t.Errorf("region %q: got %q, %v; want %q", in, res.Reception.Region, err, want)
+		}
 	}
 }
 

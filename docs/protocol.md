@@ -76,9 +76,25 @@ Consequences for MeshTwin:
   by observer O, the implied links are `h1–h2, …, h(k-1)–hk, hk–O`, plus `origin–h1` when the
   origin is known (ADVERT, ANON_REQ). For direct packets we treat path[0] only as a weak hint
   that some node believed it had a link to path[0].
-- **Only repeaters forward floods.** Companions never relay (in the firmware, forwarding is gated by
-  `allowPacketForward`, which repeater builds override). **UNVERIFIED:** whether room servers
-  forward. Check `examples/simple_room_server`.
+- **By default only repeaters forward floods** (each example's `allowPacketForward` override, commit `81dbae5`, read 2026-11-08):
+
+  | node type | forwards by default? | source |
+  |---|---|---|
+  | repeater | **yes**, unless over the hop limit (`flood_max`; adverts `flood_max_advert = 8`), wrong region scope, or loop-detected | `examples/simple_repeater/MyMesh.cpp`, `src/helpers/CommonCLI.h` (`disable_fwd = 0`) |
+  | room server | no (`_prefs.disable_fwd = 1`); `set repeat on` enables it | `examples/simple_room_server/MyMesh.cpp`, `CommonCLI.cpp` |
+  | sensor | no (`disable_fwd = true`) | `examples/simple_sensor/SensorMesh.cpp` |
+  | companion | no (`setRepeatEn(false)`); "client repeat" is only allowed on 433.000 / 869.495 / 918.000 MHz | `examples/companion_radio/MyMesh.cpp` |
+
+  So a hop hash is most likely a repeater, but the others can't be ruled out. Phase 3 hop resolution prefers
+  repeater candidates and falls back to other roles at a lower prior.
+- **Advert cadence decides how long it takes to learn the network.** Repeaters and room servers send a **flood**
+  advert every **47 h** by default (`flood_advert_interval`, settable 3–168 h). Their zero-hop advert (heard one hop
+  away only) runs every 2 min on a factory-fresh device and is switched **off** once the device is configured, unless
+  set to 60–240 min (`CommonCLI.cpp`, `MIN_LOCAL_ADVERT_INTERVAL 60`). Companions advertise only when a user asks.
+  → Node positions and roles need a lookback of **≥ 48 h, and 7 days to be safe**, longer than the link window.
+- **Path hash width is chosen by the originator** (`path_hash_mode`, default **0 = 1 byte**, max 2 = 3 bytes), and
+  every forwarding repeater appends at the packet's existing width (`Mesh::routeRecvPacket`). Expect mostly 1-byte
+  paths, so collisions are the normal case, and mixed widths across packets.
 - **Echoes:** an observer that is also a repeater hears its own relayed copy come back from a
   neighbor, so its own hash appears in the path. Real example from our synthetic sample:
   observer SEA-RPT-01 (key `35…`) received an ADVERT with path `[35, 34]`. RPT-01 relayed it,
@@ -207,6 +223,6 @@ Quirks the ingester must handle:
 | Observer `hash` == `calculatePacketHash` | `anonymize` prints `hash_mismatches_in_original`; `TestRecordedCaptures` asserts 0 | when a capture exists |
 | Observers publish duplicates (meshcore-ha: no, within 1 s) | count `(hash, observer)` repeats in the capture | when a capture exists |
 | Timestamp timezone in meshcoretomqtt | its source, `datetime.now()` call (handled either way: no offset → receive time) | when a capture exists |
-| Room servers forward floods? | `examples/simple_room_server` | Phase 3 |
+| ~~Room servers forward floods?~~ **Resolved 2026-11-08:** not by default (see §2) | `examples/simple_room_server` | done |
 | US default radio preset (freq/BW/SF) | MeshCore app presets / docs | Phase 4 (radio model) |
 | Transport code semantics | `examples/*` `allowPacketForward` | only if needed |

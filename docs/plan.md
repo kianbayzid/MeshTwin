@@ -58,3 +58,10 @@
 - `meshdecode` CLI for demos.
 - Open: no real capture yet (needs an observer or a broker read account); MinIO end-to-end run pending
   the user's OK on the `pgsty/minio` image.
+
+## Phase 3: done (2026-11-09), pending the user's review
+- Agent workflow set up first: `.claude/agents/*`, hooks, `docs/api-contract.md`, `docs/ai-workflow.md`.
+- go-engineer: `LocalStore` + `-local-dir`, fixtures `testdata/parquet/sea-seed1-2h-{hash1,hash3}`, region validation at the topic.
+- protocol-researcher: relay roles, advert cadence (47 h), hash-width default. Recorded in protocol.md §2.
+- analytics-engineer: `analytics/` (topology, hop resolution, resilience, evaluation, contract JSON).
+- Follow-ups: synthetic advert cadence is unrealistic (go lane); EM-lite prior refinement for collisions like `60` (analytics).

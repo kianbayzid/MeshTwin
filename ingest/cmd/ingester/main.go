@@ -42,6 +42,7 @@ type config struct {
 
 	S3Endpoint, S3AccessKey, S3SecretKey, S3Bucket string
 	S3TLS                                          bool
+	LocalDir                                       string
 
 	FlushRows int
 	FlushAge  time.Duration
@@ -94,6 +95,7 @@ func parseConfig() config {
 	flag.StringVar(&c.S3AccessKey, "s3-access-key", env("S3_ACCESS_KEY", ""), "access key (secret: env S3_SECRET_KEY)")
 	flag.StringVar(&c.S3Bucket, "s3-bucket", env("S3_BUCKET", "meshtwin"), "bucket")
 	flag.BoolVar(&c.S3TLS, "s3-tls", env("S3_TLS", "false") == "true", "use HTTPS to S3")
+	flag.StringVar(&c.LocalDir, "local-dir", env("LOCAL_DIR", ""), "write Parquet under this directory instead of S3 (dev/fixtures)")
 	flag.IntVar(&c.FlushRows, "flush-rows", envNum("FLUSH_ROWS", 100_000), "write a partition's file at this many rows")
 	flag.DurationVar(&c.FlushAge, "flush-age", envDur("FLUSH_AGE", 5*time.Minute), "or when its oldest buffered row is this old")
 	flag.StringVar(&c.HTTPAddr, "http-addr", env("HTTP_ADDR", ":8080"), "metrics and health endpoints")
@@ -120,22 +122,9 @@ func run(c config) error {
 	if err != nil {
 		return err
 	}
-	// Storage often starts after us (compose, Kubernetes): retry for a minute
-	// before giving up, instead of depending on startup order.
-	var store *ingest.S3Store
-	for attempt := 1; ; attempt++ {
-		store, err = ingest.NewS3Store(ctx, c.S3Endpoint, c.S3AccessKey, c.S3SecretKey, c.S3Bucket, c.S3TLS)
-		if err == nil {
-			break
-		}
-		if attempt == 12 || ctx.Err() != nil {
-			return fmt.Errorf("object storage: %w", err)
-		}
-		slog.Warn("object storage not reachable yet, retrying", "endpoint", c.S3Endpoint, "err", err)
-		select {
-		case <-time.After(5 * time.Second):
-		case <-ctx.Done():
-		}
+	store, err := openStore(ctx, c)
+	if err != nil {
+		return err
 	}
 	w := &ingest.Writer{Store: store, FlushRows: c.FlushRows, FlushAge: c.FlushAge, Now: time.Now}
 
@@ -224,6 +213,30 @@ func run(c config) error {
 	}
 	slog.Info("ingester stopped cleanly")
 	return nil
+}
+
+// openStore picks the local directory store when -local-dir is set, else S3.
+func openStore(ctx context.Context, c config) (ingest.Store, error) {
+	if c.LocalDir != "" {
+		slog.Info("writing Parquet to local directory", "dir", c.LocalDir)
+		return ingest.LocalStore{Root: c.LocalDir}, nil
+	}
+	// Storage often starts after us (compose, Kubernetes): retry for a minute
+	// before giving up, instead of depending on startup order.
+	for attempt := 1; ; attempt++ {
+		s3, err := ingest.NewS3Store(ctx, c.S3Endpoint, c.S3AccessKey, c.S3SecretKey, c.S3Bucket, c.S3TLS)
+		if err == nil {
+			return s3, nil
+		}
+		if attempt == 12 || ctx.Err() != nil {
+			return nil, fmt.Errorf("object storage: %w", err)
+		}
+		slog.Warn("object storage not reachable yet, retrying", "endpoint", c.S3Endpoint, "err", err)
+		select {
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+		}
+	}
 }
 
 func handle(w *ingest.Writer, r replay.Record) {

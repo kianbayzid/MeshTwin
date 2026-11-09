@@ -162,13 +162,28 @@ func parseTopic(topic string) (region, observerID string, ok bool) {
 		return "", "", false
 	}
 	key := strings.ToUpper(parts[2])
-	if len(parts[1]) == 0 || len(key) != 2*meshcore.PubKeySize {
+	if !validRegion(parts[1]) || len(key) != 2*meshcore.PubKeySize {
 		return "", "", false
 	}
 	if _, err := hex.DecodeString(key); err != nil {
 		return "", "", false
 	}
 	return strings.ToUpper(parts[1]), key, true
+}
+
+// validRegion accepts 2-8 ASCII letters or digits (IATA codes, or LetsMesh's
+// "test"). The region becomes part of object keys, so this is a trust boundary:
+// it blocks separators, "..", and ':' (a Windows alternate data stream).
+func validRegion(r string) bool {
+	if len(r) < 2 || len(r) > 8 {
+		return false
+	}
+	for _, c := range r {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // receptionID identifies one reception event: an MQTT redelivery or a buffer

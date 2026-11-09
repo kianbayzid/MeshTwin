@@ -17,6 +17,26 @@ Portfolio project: every line must be explainable in an interview. Clear > cleve
 | `/dashboards` | Grafana JSON |
 | `/docs` | `protocol.md`, `data-sources.md`, `benchmarks.md`, design notes |
 
+## Lane ownership (agents in `.claude/agents/`, rationale in `docs/ai-workflow.md`)
+| Lane | Agent | May edit |
+|------|-------|----------|
+| Go / ingest / API | `go-engineer` | `ingest/`, `api/`, `schema/` |
+| Analytics | `analytics-engineer` | `analytics/` |
+| Platform | `platform-engineer` | `deploy/`, `dashboards/`, `.github/`, `Makefile`, `**/Dockerfile`, `**/.dockerignore` |
+| Verification | `verifier` | nothing (read + run checks only) |
+| Research | `protocol-researcher` | nothing (read + web only) |
+| Lead (main session) | — | `docs/`, `CLAUDE.md`, `.claude/`, `testdata/` READMEs; assigns work and merges |
+
+- A lane that needs a change outside its directories stops and reports it; the lead routes it to the owner.
+- Contracts between lanes: `schema/schema.json` (Go ↔ Python) and `docs/api-contract.md` (analytics ↔ API).
+  Changing either needs both lanes plus the verifier.
+- **Every change goes through `verifier` before merge.** No verdict, or `FAIL`, means not merged.
+  The owning lane fixes failures; the verifier never edits.
+- **Merge order** within a phase: analytics and API lanes first (in either order, each verified), then the
+  platform lane, which packages what those lanes produced. Re-run the verifier after each merge.
+- Until the repo is under git, "merge" means the lead accepts the change after a `PASS`.
+  With git, each lane works on `lane/<agent>/<topic>`.
+
 ## Workflow
 - Work in the phases defined in `docs/plan.md`. **Stop after each phase** for the user to run and question it.
 - End of each phase: design decisions + trade-offs, three interview questions with answers, numbers into `docs/benchmarks.md`.
