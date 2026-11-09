@@ -32,7 +32,7 @@
       {"name": "pubkey",         "type": "string",             "nullable": false},
       {"name": "name",           "type": "string",             "nullable": true},
       {"name": "role",           "type": "int8",               "nullable": false},
-      {"name": "advert_time",    "type": "timestamp[s, UTC]",  "nullable": false},
+      {"name": "advert_time",    "type": "timestamp[ms, UTC]",  "nullable": false},
       {"name": "lat",            "type": "float64",            "nullable": true},
       {"name": "lon",            "type": "float64",            "nullable": true}
     ]

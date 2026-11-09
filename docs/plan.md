@@ -48,3 +48,13 @@
   because `packet_hash` is not unique per row, and switched to hex `path_hops` and `trace_snr_db`.
 - **Moved to Phase 2:** recording the real capture and the anonymizer. A broker has to pass
   the terms check in `docs/data-sources.md` first, and the capture only matters once the ingester exists.
+
+## Phase 2: done (2026-11-08)
+- Ingester: `ingest/cmd/ingester` (live / replay / synthetic), `internal/ingest` (convert, partitioned writer, S3),
+  `internal/source` (MQTT), metrics and health endpoints, graceful drain on SIGTERM.
+- Two live settings, per the user's request: `deploy/compose/own-observer.env` and `deploy/compose/public-broker.env`.
+  Synthetic stays for unit tests and CI only. Real captures come from the two settings.
+- Capture tooling: `RECORD_FILE` on the ingester + `cmd/anonymize`. Workflow in `docs/recording.md`.
+- `meshdecode` CLI for demos.
+- Open: no real capture yet (needs an observer or a broker read account); MinIO end-to-end run pending
+  the user's OK on the `pgsty/minio` image.

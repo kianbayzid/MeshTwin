@@ -1,0 +1,96 @@
+# MeshTwin local stack. Pick ONE ingester profile:
+#
+#   docker compose --profile own-observer  up --build   # your observer -> local mosquitto -> ingester
+#   docker compose --profile public-broker up --build   # community broker (needs a read account)
+#   docker compose --profile replay        up --build   # replay a capture file, then exit
+#
+# Secrets come from ./.env (copy .env.example; .env is git-ignored).
+# Record raw traffic for the test capture: RECORD_FILE=/records/sea.ndjson docker compose ...
+name: meshtwin
+
+x-ingester: &ingester
+  build: ../../ingest
+  image: meshtwin/ingester:dev
+  restart: unless-stopped
+  depends_on: [minio]
+  ports: ["127.0.0.1:8080:8080"] # metrics + health; localhost only
+  volumes:
+    - ../../testdata/recorded/raw:/records # git-ignored: raw real data never enters the repo
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-s3-env: &s3-env
+  S3_ENDPOINT: minio:9000
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-meshtwin}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-}
+  RECORD_FILE: ${RECORD_FILE:-}
+
+services:
+  minio:
+    # MinIO stopped publishing community images in 2025; pgsty/minio is a
+    # maintained community rebuild (see docs/data-sources.md, supply chain).
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-meshtwin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"] # S3 API, web console
+    volumes: [minio-data:/data]
+    restart: unless-stopped
+
+  # --- Setting 1: your own observer -----------------------------------------
+  # Point your observer (meshcoretomqtt, MQTT observer firmware, meshcore-ha)
+  # at this broker: host = this machine's LAN IP, port 1883, the username and
+  # password from .env. Already have a broker? Set MQTT_URL in
+  # own-observer.env and don't start this service.
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    profiles: [own-observer]
+    environment:
+      OBSERVER_MQTT_USERNAME: ${OBSERVER_MQTT_USERNAME:-observer}
+      OBSERVER_MQTT_PASSWORD: ${OBSERVER_MQTT_PASSWORD:-}
+    command: >
+      sh -c 'test -n "$$OBSERVER_MQTT_PASSWORD" || { echo "set OBSERVER_MQTT_PASSWORD in deploy/compose/.env"; exit 1; };
+             mosquitto_passwd -b -c /mosquitto/data/pw "$$OBSERVER_MQTT_USERNAME" "$$OBSERVER_MQTT_PASSWORD" &&
+             chown mosquitto:mosquitto /mosquitto/data/pw && chmod 0600 /mosquitto/data/pw &&
+             exec mosquitto -c /mosquitto/config/mosquitto.conf'
+    volumes: ["./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro"]
+    ports: ["1883:1883"] # LAN-reachable so your observer can publish; do NOT port-forward this
+    restart: unless-stopped
+
+  ingester-observer:
+    <<: *ingester
+    profiles: [own-observer]
+    env_file: [own-observer.env]
+    environment:
+      <<: *s3-env
+      MQTT_USERNAME: ${OBSERVER_MQTT_USERNAME:-observer}
+      MQTT_PASSWORD: ${OBSERVER_MQTT_PASSWORD:-}
+
+  # --- Setting 2: public community broker -----------------------------------
+  ingester-public:
+    <<: *ingester
+    profiles: [public-broker]
+    env_file: [public-broker.env]
+    environment:
+      <<: *s3-env
+      MQTT_USERNAME: ${PUBLIC_MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${PUBLIC_MQTT_PASSWORD:-}
+
+  # --- Replay a capture (no radio, no broker) --------------------------------
+  ingester-replay:
+    <<: *ingester
+    profiles: [replay]
+    restart: "no" # batch: exits when the file is done
+    volumes:
+      - ../../testdata:/testdata:ro
+    environment:
+      <<: *s3-env
+      MODE: replay
+      REPLAY_FILE: ${REPLAY_FILE:-/testdata/recorded/sea-anon.ndjson}
+      REPLAY_SPEED: ${REPLAY_SPEED:-0}
+      RECORD_FILE: ""
+
+volumes:
+  minio-data:

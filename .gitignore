@@ -1,0 +1,14 @@
+# Secrets
+.env
+!.env.example
+
+# Raw real captures: private, never committed (anonymize first, see docs/recording.md)
+testdata/recorded/raw/
+
+# Build output
+*.exe
+*.test
+/ingest/ingester
+/ingest/meshgen
+/ingest/meshdecode
+/ingest/anonymize

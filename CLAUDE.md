@@ -38,7 +38,7 @@ Portfolio project: every line must be explainable in an interview. Clear > cleve
 - Broker connections: configurable, rate-limited, polite. Every source listed in `docs/data-sources.md` with its terms.
 
 ## Go (`/ingest`, `/api`)
-- Go 1.25+ modules, one module per service. Standard library first (`net/http`, `log/slog`, `context`).
+- Go 1.26+ modules, one module per service. Standard library first (`net/http`, `log/slog`, `context`).
 - Known deps only: `eclipse/paho.mqtt.golang`, `parquet-go/parquet-go`, `minio/minio-go/v7`, `prometheus/client_golang`.
 - `gofmt`, `golangci-lint`. Table-driven tests with `testing`; no assertion libraries.
 - Errors are wrapped with `%w` and context; no panics outside `main`.

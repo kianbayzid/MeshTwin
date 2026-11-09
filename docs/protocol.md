@@ -186,14 +186,17 @@ Quirks the ingester must handle:
   observer timestamp if it has an offset, otherwise fall back to the ingester's receive time.
 - **`path` varies:** a `"C2 -> E2"` string (meshcoretomqtt) or a `["c2","e2"]` array (agessaman), and it
   appears only on direct-route packets. → **We ignore it and decode `raw`.**
-- `route` letters: F = flood, D = direct. **UNVERIFIED:** T and U, presumably transport and unknown.
-  Again, we derive the route from `raw` instead.
+- `route` letters: `F` = flood **and transport flood**, `D` = direct **and transport direct**; a `D` packet
+  also carries `path` ([meshcore-ha MQTT docs](https://meshcore-dev.github.io/meshcore-ha/docs/ha/mqtt/), checked 2026-11-08).
+  We still derive the route from `raw`, because the letter loses the transport distinction.
+- Some tools add fields (meshcore-ha sends `duration`). Unknown fields are ignored.
 - `SNR`/`RSSI`/`score` appear on rx only. SNR is the **last hop only** (the radio measures only
   the final transmission). `score` is a rebroadcast score ×1000. We don't use it.
 - `direction: "tx"` messages are the observer's own transmissions. They are dropped at ingest
   because they carry no reception data.
-- **UNVERIFIED:** whether observers publish *every* duplicate reception. We assume yes, since the RX log
-  prints each received frame. Confirm on the capture by counting `(hash, observer)` repeats.
+- **Duplicate receptions depend on the observer software.** meshcore-ha documents "duplicates within
+  1 second are dropped". **UNVERIFIED** for meshcoretomqtt and the observer firmware: count
+  `(hash, observer)` repeats in the capture. Either way, the schema handles both (`reception_id`).
 
 ---
 
@@ -201,9 +204,9 @@ Quirks the ingester must handle:
 
 | item | where to check | when |
 |---|---|---|
-| Observer `hash` == `calculatePacketHash` | recompute over the recorded capture | Phase 2 |
-| Observers publish duplicates | count `(hash, observer)` repeats in the capture | Phase 2 |
-| Timestamp timezone in meshcoretomqtt | its source, `datetime.now()` call | Phase 2 |
+| Observer `hash` == `calculatePacketHash` | `anonymize` prints `hash_mismatches_in_original`; `TestRecordedCaptures` asserts 0 | when a capture exists |
+| Observers publish duplicates (meshcore-ha: no, within 1 s) | count `(hash, observer)` repeats in the capture | when a capture exists |
+| Timestamp timezone in meshcoretomqtt | its source, `datetime.now()` call (handled either way: no offset → receive time) | when a capture exists |
 | Room servers forward floods? | `examples/simple_room_server` | Phase 3 |
 | US default radio preset (freq/BW/SF) | MeshCore app presets / docs | Phase 4 (radio model) |
 | Transport code semantics | `examples/*` `allowPacketForward` | only if needed |
