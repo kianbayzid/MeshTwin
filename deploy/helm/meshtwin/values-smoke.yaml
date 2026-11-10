@@ -1,0 +1,15 @@
+# k3d SMOKE TEST ONLY - loads TEST DATA. Use: make smoke
+#
+# Seeds the bucket with the repo's SYNTHETIC fixture
+# (testdata/parquet/sea-seed1-2h-hash1, CI/test data, not real packets) so the
+# CronJobs and the map have something to show. Never use this file for a real run.
+#
+# The ingester still runs a real setting (own-observer, bundled mosquitto): it
+# connects and idles, which exercises its probes and metrics without fake traffic.
+ingester:
+  source: own-observer
+smoke:
+  seedFixtures: true
+# Smaller cache and store for a laptop cluster.
+seaweedfs:
+  storage: 2Gi

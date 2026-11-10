@@ -38,13 +38,13 @@ def _public_node(n: Node) -> dict[str, Any]:
     }
 
 
-def meta(run: TopologyRun) -> dict[str, Any]:
+def meta(run: TopologyRun, source: str = SOURCE) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "region": run.region,
         "generated_at": run.generated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window": {"from": rfc3339(run.from_us), "to": rfc3339(run.to_us)},
-        "source": SOURCE,
+        "source": source,
     }
 
 

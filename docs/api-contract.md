@@ -55,6 +55,7 @@ Regions with at least one summary.
 The inferred link graph for the latest window. Source: the hourly topology job (Phase 3).
 Query: `min_confidence` (0.5–1, default 0.5): drop less certain links. The topology job exports only links with
 confidence ≥ 0.5, and resilience is computed on those, so the API can filter upward but not below 0.5.
+Filtering only removes links: node `degree` and `stats` stay as the job computed them (the slider declutters the map; the API is not a second analytics engine).
 ```json
 {
   "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-09T14:00:00Z",
@@ -129,6 +130,10 @@ Query: `sort=residual|abs_residual|observations` (default `abs_residual`), `limi
 }
 ```
 - `residual_db = observed − predicted`. Positive means the link is better than the model expects.
+- All `sort` orders are descending: `residual` puts links much better than the model first; ties break on `a`, then `b`.
+- `summary.median_abs_residual_db`, `rmse_db` and `bias_db` are `null` when `links` is 0 (a 0 would claim a perfect fit).
+- `model.dem` is `"Copernicus GLO-30"` or `"flat (no DEM)"` when the job ran without terrain.
+- Published `distance_km` is measured between the **snapped** cell centres (0.1 km), so it reveals nothing finer than `location`.
 
 ### `GET /api/v1/regions/{region}/links/surprising`
 Where the model and reality disagree most. Source: the nightly propagation job (Phase 4).
@@ -155,7 +160,8 @@ Query: `top` (default 10, max 50).
 {
   "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-09T04:00:00Z",
            "window": {"from": "2026-11-02T04:00:00Z", "to": "2026-11-09T04:00:00Z"}, "source": "placement-job"},
-  "method": {"grid_deg": 0.01, "candidates_scored": 1600, "antenna_height_m": 10, "model": "fspl+knife-edge v1"},
+  "method": {"grid_deg": 0.01, "candidates_scored": 1600, "antenna_height_m": 10, "model": "fspl+knife-edge v1",
+             "dem": "Copernicus GLO-30", "spofs_checked_top": 50},
   "candidates": [
     {"rank": 1, "location": {"lat": 47.68, "lon": -122.21, "grid_deg": 0.01},
      "score": 0.83,
@@ -167,6 +173,9 @@ Query: `top` (default 10, max 50).
 }
 ```
 - Candidate locations are grid cells by construction, so they need no snapping.
+- `score` is in [0, 1] and relative to the run: 0.7 × pairs gained / best pairs gained + 0.3 × SPOFs removed / total SPOFs.
+- `spofs_removed` is computed only for the `method.spofs_checked_top` cells with the most pairs gained; other cells show `[]` (never over-claims).
+- `method.dem` is `"Copernicus GLO-30"` or `"flat (no DEM)"`, as in residuals.
 
 ### `GET /` and `/static/*`
 The Leaflet map page (Phase 5). It only calls the endpoints above.

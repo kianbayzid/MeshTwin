@@ -1,0 +1,50 @@
+{{- $c := dict "root" $ "component" "api" }}
+# Read-only REST API + map. Stateless (summaries live in S3), so 2 replicas.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {{- include "meshtwin.podSecurity" 65532 | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ .Values.images.api }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          env: {{- include "meshtwin.s3Env" . | nindent 12 }}
+          ports:
+            - {name: http, containerPort: 8080}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          # Readiness hits /api/v1/regions, not /readyz, on purpose: it proves S3 is
+          # reachable AND reloads every summary (past the 30 s cache TTL), which is
+          # what refreshes meshtwin_api_summary_generated_timestamp_seconds. A
+          # /metrics scrape does not, so without traffic the freshness alerts would
+          # fire falsely. Cost: probe requests show up in the request-rate panel.
+          readinessProbe:
+            httpGet: {path: /api/v1/regions, port: http}
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources: {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+---
+# NodePort: k3d maps a host port to it (deploy/k3d/cluster.yaml); no ingress needed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  type: NodePort
+  selector: {{- include "meshtwin.selector" $c | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http, nodePort: {{ .Values.api.nodePort }}}

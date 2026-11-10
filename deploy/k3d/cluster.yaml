@@ -1,0 +1,32 @@
+# Local MeshTwin cluster: one k3s server node, no agents (a laptop demo; the
+# chart has no multi-node needs). `make cluster` creates it as context k3d-meshtwin.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: meshtwin
+servers: 1
+agents: 0
+kubeAPI:
+  hostIP: "127.0.0.1" # the API server on localhost only, not 0.0.0.0
+image: rancher/k3s:v1.35.5-k3s1@sha256:2074403abe1bded11ef3dde09d457e13be8e0b64c218b1c4f8269b4565cfbc65
+ports:
+  # Host -> NodePort. API + map and Grafana on localhost only.
+  - port: 127.0.0.1:8090:30080
+    nodeFilters: [server:0]
+  - port: 127.0.0.1:3030:30300
+    nodeFilters: [server:0]
+  # Bundled mosquitto (own-observer setting): LAN-reachable so your observer can
+  # publish, like docker-compose's 1883. Do NOT port-forward it to the internet.
+  - port: 1883:31883
+    nodeFilters: [server:0]
+options:
+  k3s:
+    extraArgs:
+      # Services are reached through the NodePorts above: no ingress or LB needed.
+      - arg: --disable=traefik
+        nodeFilters: [server:*]
+      - arg: --disable=servicelb
+        nodeFilters: [server:*]
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: false # always pass --context k3d-meshtwin explicitly

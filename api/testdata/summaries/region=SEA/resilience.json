@@ -1,0 +1,135 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "region": "SEA",
+    "generated_at": "2026-11-09T06:49:16Z",
+    "window": {
+      "from": "2026-10-31T02:00:06Z",
+      "to": "2026-11-01T02:00:06Z"
+    },
+    "source": "topology-job"
+  },
+  "baseline": {
+    "nodes": 90,
+    "reachable_pairs": 2331,
+    "reachable_share": 0.582
+  },
+  "single_points_of_failure": [
+    {
+      "id": "3491927B",
+      "role": "repeater",
+      "name": "SEA-RPT-03",
+      "location": {
+        "lat": 47.59,
+        "lon": -122.09,
+        "grid_deg": 0.01
+      },
+      "articulation_point": true,
+      "reachable_pairs_lost": 144,
+      "reachable_share_after": 0.552,
+      "nodes_cut_off": 0,
+      "confidence": 1.0
+    },
+    {
+      "id": "351FC1F9",
+      "role": "repeater",
+      "name": "SEA-RPT-01",
+      "location": {
+        "lat": 47.55,
+        "lon": -122.06,
+        "grid_deg": 0.01
+      },
+      "articulation_point": true,
+      "reachable_pairs_lost": 74,
+      "reachable_share_after": 0.569,
+      "nodes_cut_off": 0,
+      "confidence": 1.0
+    },
+    {
+      "id": "058F237E",
+      "role": "repeater",
+      "name": "SEA-RPT-19",
+      "location": {
+        "lat": 47.71,
+        "lon": -122.15,
+        "grid_deg": 0.01
+      },
+      "articulation_point": false,
+      "reachable_pairs_lost": 61,
+      "reachable_share_after": 0.564,
+      "nodes_cut_off": 1,
+      "confidence": 1.0
+    },
+    {
+      "id": "8810F9CF",
+      "role": "repeater",
+      "name": "SEA-RPT-06",
+      "location": {
+        "lat": 47.5,
+        "lon": -122.26,
+        "grid_deg": 0.01
+      },
+      "articulation_point": true,
+      "reachable_pairs_lost": 61,
+      "reachable_share_after": 0.564,
+      "nodes_cut_off": 1,
+      "confidence": 1.0
+    },
+    {
+      "id": "B67F9DEC",
+      "role": "repeater",
+      "name": "SEA-RPT-04",
+      "location": {
+        "lat": 47.72,
+        "lon": -122.33,
+        "grid_deg": 0.01
+      },
+      "articulation_point": true,
+      "reachable_pairs_lost": 61,
+      "reachable_share_after": 0.564,
+      "nodes_cut_off": 1,
+      "confidence": 1.0
+    },
+    {
+      "id": "FDC42289",
+      "role": "repeater",
+      "name": "SEA-RPT-28",
+      "location": {
+        "lat": 47.47,
+        "lon": -122.06,
+        "grid_deg": 0.01
+      },
+      "articulation_point": false,
+      "reachable_pairs_lost": 26,
+      "reachable_share_after": 0.582,
+      "nodes_cut_off": 0,
+      "confidence": 1.0
+    }
+  ],
+  "bridges": [
+    {
+      "a": "651B8520",
+      "b": "B67F9DEC",
+      "reachable_pairs_lost": 62,
+      "confidence": 1.0
+    },
+    {
+      "a": "8810F9CF",
+      "b": "C69C9AEB",
+      "reachable_pairs_lost": 62,
+      "confidence": 1.0
+    },
+    {
+      "a": "351FC1F9",
+      "b": "FDC42289",
+      "reachable_pairs_lost": 52,
+      "confidence": 1.0
+    },
+    {
+      "a": "04080AC9",
+      "b": "3491927B",
+      "reachable_pairs_lost": 17,
+      "confidence": 1.0
+    }
+  ]
+}

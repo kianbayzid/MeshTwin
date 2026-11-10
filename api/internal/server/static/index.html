@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshTwin map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>MeshTwin</h1>
+  <label>Region <select id="region"></select></label>
+  <label>Min confidence <input id="minconf" type="range" min="0.5" max="1" step="0.05" value="0.5">
+    <output id="minconf-value">0.50</output></label>
+  <label><input id="residuals" type="checkbox"> Colour links by residual</label>
+  <p id="status" role="status" aria-live="polite"></p>
+</header>
+<main id="map" aria-label="Map of the mesh network"></main>
+<div id="legend" hidden></div>
+<footer>
+  <details>
+    <summary>About this map and data credits</summary>
+    <p>Locations are 0.01° grid cells (about 1 km), never exact positions. Companion devices are shown without names.</p>
+    <p>Terrain: produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
+      provided under COPERNICUS by the European Union and ESA; all rights reserved.
+      The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any
+      use of the Copernicus WorldDEM-30.</p>
+  </details>
+</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

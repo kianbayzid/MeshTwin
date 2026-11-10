@@ -1,0 +1,106 @@
+{{- $c := dict "root" $ "component" "seaweedfs" }}
+# Object store: SeaweedFS `weed mini` (master + volume + filer + S3 in one
+# process), one replica on a PVC. Only the S3 port is exposed as a Service.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-seaweedfs
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  serviceName: {{ .Release.Name }}-seaweedfs
+  replicas: 1
+  selector:
+    matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      # uid 1000 = the image's `seaweed` user, so the entrypoint skips its root chown step.
+      securityContext: {{- include "meshtwin.podSecurity" 1000 | nindent 8 }}
+      containers:
+        - name: seaweedfs
+          image: {{ .Values.images.seaweedfs }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          # Without a secret SeaweedFS starts in "allow all" mode (e.g. an existingSecret
+          # with an empty secret-key), so refuse to start instead. Then the image's own
+          # entrypoint with the args below.
+          command: [sh, -c, 'test -n "$AWS_SECRET_ACCESS_KEY" || { echo "S3 secret-key is empty: refusing to start in allow-all mode" >&2; exit 1; }; exec /entrypoint.sh "$@"', sh]
+          # Optional extras off; telemetry off (it reports to seaweedfs.com by default).
+          args: [mini, -dir=/data, -webdav=false, -admin.ui=false,
+                 -s3.port.iceberg=0, -master.telemetry=false]
+          env:
+            # Seeds the single S3 identity and pre-creates the bucket (idempotent).
+            # Without credentials SeaweedFS would run in "allow all" mode.
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: {{ include "meshtwin.s3Secret" . }}, key: access-key}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ include "meshtwin.s3Secret" . }}, key: secret-key}}
+            - name: S3_BUCKET
+              value: {{ .Values.s3.bucket }}
+          ports:
+            - {name: s3, containerPort: 8333}
+          readinessProbe:
+            httpGet: {path: /healthz, port: s3}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: s3}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources: {{- toYaml .Values.seaweedfs.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp} # weed's local gRPC unix sockets
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-seaweedfs
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "meshtwin.selector" $c | nindent 4 }}
+  ports:
+    - {name: s3, port: 8333, targetPort: s3}
+---
+# Only this release's S3 clients may reach SeaweedFS, and only on the S3 port.
+# Its other ports (master, volume, filer gRPC incl. an unauthenticated IAM
+# service) stay unreachable from other pods. k3s enforces this with kube-router.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-seaweedfs
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - ingester
+                  - api
+                  - smoke-seed
+                  {{- range $name, $_ := .Values.analytics.jobs }}
+                  - analytics-{{ $name }}
+                  {{- end }}
+      ports:
+        - {port: s3, protocol: TCP}

@@ -15,6 +15,7 @@ import pytest
 
 from meshtwin_analytics.cli import main
 from meshtwin_analytics.evaluate import evaluate, load_truth
+from meshtwin_analytics.geo import haversine_km, snap
 from meshtwin_analytics.pipeline import TopologyRun
 
 from .conftest import HASH1, HASH3, REPO
@@ -25,7 +26,10 @@ FIXTURES = {"hash1": HASH1, "hash3": HASH3}
 @pytest.fixture(scope="module", params=sorted(FIXTURES))
 def out_dir(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Path:
     out = tmp_path_factory.mktemp(request.param, numbered=False)
-    assert main(["topology", "--root", str(FIXTURES[request.param]), "--out", str(out)]) == 0
+    root = str(FIXTURES[request.param])
+    assert main(["topology", "--root", root, "--out", str(out)]) == 0
+    assert main(["propagation", "--root", root, "--out", str(out)]) == 0
+    assert main(["placement", "--root", root, "--out", str(out)]) == 0
     return out
 
 
@@ -68,7 +72,16 @@ def _raw_coordinates(root: Path) -> set[float]:
     return {float(v) for row in rows for v in row}
 
 
-@pytest.mark.parametrize("name", ["topology", "resilience"])
+SUMMARIES = {
+    "topology": "topology-job",
+    "resilience": "topology-job",
+    "residuals": "propagation-job",
+    "surprising": "propagation-job",
+    "placement": "placement-job",
+}
+
+
+@pytest.mark.parametrize("name", sorted(SUMMARIES))
 def test_privacy(out_dir: Path, name: str) -> None:
     doc = _summary(out_dir, name)
     text = json.dumps(doc)
@@ -76,7 +89,7 @@ def test_privacy(out_dir: Path, name: str) -> None:
 
     # 1. Every coordinate is on the 0.01 grid with at most two decimals.
     locations = [v for k, v in _walk_dicts(doc) if k == "location" and v is not None]
-    assert locations or name == "resilience"
+    assert locations or name not in ("topology", "resilience", "placement")
     for loc in locations:
         assert loc["grid_deg"] == 0.01
         for v in (loc["lat"], loc["lon"]):
@@ -116,6 +129,38 @@ def test_companion_names_are_null(out_dir: Path) -> None:
     companions = [n for n in _summary(out_dir, "topology")["nodes"] if n["role"] == "companion"]
     assert companions
     assert all(n["name"] is None for n in companions)
+
+
+def _pair_links(out: Path) -> list[dict[str, Any]]:
+    res, sur = _summary(out, "residuals"), _summary(out, "surprising")
+    links: list[dict[str, Any]] = (
+        res["links"]
+        + sur["observed_but_predicted_impossible"]
+        + sur["predicted_strong_but_never_seen"]
+    )
+    return links
+
+
+def test_published_distance_is_between_grid_cells(out_dir: Path) -> None:
+    """distance_km must come from the snapped cells (to 0.1 km), never the raw positions."""
+    cells = {n["id"]: n["location"] for n in _summary(out_dir, "topology")["nodes"]}
+    links = _pair_links(out_dir)
+    assert links
+    for lk in links:
+        a, b = cells[lk["a"]], cells[lk["b"]]
+        assert lk["distance_km"] == round(haversine_km(a["lat"], a["lon"], b["lat"], b["lon"]), 1)
+
+
+def test_residual_summary(out_dir: Path) -> None:
+    doc = _summary(out_dir, "residuals")
+    res = [lk["residual_db"] for lk in doc["links"]]
+    assert doc["summary"]["links"] == len(res) > 0
+    assert [abs(r) for r in res] == sorted((abs(r) for r in res), reverse=True)
+    assert doc["model"] == {"name": "fspl+knife-edge", "version": "1", "dem": "flat (no DEM)"}
+    assert all(lk["confidence"] >= 0.5 for lk in doc["links"])
+    unseen = _summary(out_dir, "surprising")["predicted_strong_but_never_seen"]
+    assert 0 < len(unseen) <= 50
+    assert all(u["both_active"] and u["distance_km"] <= 30.5 for u in unseen)
 
 
 # --- contract ----------------------------------------------------------------------------
@@ -161,11 +206,14 @@ def _conforms(got: Any, want: Any, path: str) -> list[str]:
     return []
 
 
-@pytest.mark.parametrize("name", ["topology", "resilience"])
+ENDPOINTS = {"residuals": "links/residuals", "surprising": "links/surprising"}
+
+
+@pytest.mark.parametrize("name", sorted(SUMMARIES))
 def test_contract(out_dir: Path, name: str) -> None:
     doc = _summary(out_dir, name)
-    assert _conforms(doc, _contract_example(name), name) == []
-    assert doc["meta"]["source"] == "topology-job"
+    assert _conforms(doc, _contract_example(ENDPOINTS.get(name, name)), name) == []
+    assert doc["meta"]["source"] == SUMMARIES[name]
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", doc["meta"]["window"]["to"])
 
 
@@ -183,6 +231,28 @@ def test_spofs_sorted_and_positive(out_dir: Path) -> None:
     lost = [s["reachable_pairs_lost"] for s in spofs]
     assert lost == sorted(lost, reverse=True)
     assert all(x > 0 for x in lost)
+
+
+def test_placement(out_dir: Path) -> None:
+    doc = _summary(out_dir, "placement")
+    ids = {n["id"] for n in _summary(out_dir, "topology")["nodes"]}
+    spofs = {s["id"] for s in _summary(out_dir, "resilience")["single_points_of_failure"]}
+    cands = doc["candidates"]
+    assert 0 < len(cands) <= 50
+    assert doc["method"]["candidates_scored"] >= len(cands)
+    assert doc["method"]["model"] == "fspl+knife-edge v1"
+    assert [c["rank"] for c in cands] == list(range(1, len(cands) + 1))
+    scores = [c["score"] for c in cands]
+    assert scores == sorted(scores, reverse=True)
+    assert all(0 <= s <= 1 for s in scores)
+    for c in cands:
+        loc = c["location"]
+        assert snap(loc["lat"], loc["lon"]) == loc  # a grid cell, by construction
+        assert {lk["to"] for lk in c["new_links"]} <= ids
+        snr = [lk["predicted_snr_db"] for lk in c["new_links"]]
+        assert snr == sorted(snr, reverse=True)
+        assert set(c["spofs_removed"]) <= spofs
+        assert c["reachable_pairs_gained"] >= 0 and c["coverage_gain_nodes"] >= 0
 
 
 # --- evaluation floors (measured: see analytics/README.md) -------------------------------

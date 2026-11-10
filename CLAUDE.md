@@ -1,7 +1,7 @@
 # MeshTwin — project conventions
 
 A coverage digital twin for live MeshCore LoRa mesh networks: ingest observer
-packets (Go), store as Parquet in MinIO, analyze topology / terrain propagation /
+packets (Go), store as Parquet in S3 (SeaweedFS), analyze topology / terrain propagation /
 resilience / placement (Python), serve read-only results (Go API + Leaflet map).
 Portfolio project: every line must be explainable in an interview. Clear > clever.
 

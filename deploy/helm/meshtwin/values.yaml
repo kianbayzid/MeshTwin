@@ -1,0 +1,124 @@
+# MeshTwin chart values. NO SECRETS IN THIS FILE (or any values file):
+# S3 keys and the Grafana password are generated into Secrets on first install
+# and kept on upgrade; MQTT credentials come from --set or an existing Secret.
+
+region: SEA # IATA code: MQTT topic filter and the analytics --region
+# DEM box for fetch-dem: minlat,minlon,maxlat,maxlon (must cover the region's nodes).
+bbox: "47.42,-122.40,47.79,-122.03"
+
+images:
+  # Our images: built by `make images` and imported into k3d (no registry).
+  ingester: meshtwin/ingester:0.6.0
+  api: meshtwin/api:0.6.0
+  analytics: meshtwin/analytics:0.6.0
+  # Third party: official images, pinned by tag and digest.
+  seaweedfs: chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
+  mosquitto: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+  prometheus: prom/prometheus:v3.16.0-distroless@sha256:e8b8fb0e336fe0affce6f9ea347b11d24975465fd3ba8119420186679c3efd5f
+  grafana: grafana/grafana:13.2.5@sha256:9f7aa1e1e3246aade5792d35a738049f7f32f89cd51d1956cf426a4e86268a84
+pullPolicy: IfNotPresent
+
+s3:
+  bucket: meshtwin
+  # Optional: name of an existing Secret with keys access-key and secret-key.
+  existingSecret: ""
+
+seaweedfs:
+  storage: 10Gi
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {cpu: "1", memory: 768Mi}
+
+ingester:
+  enabled: true
+  # Which live setting (docs/data-sources.md). Synthetic data is never used here.
+  source: own-observer # own-observer | public-broker
+  sources:
+    own-observer:
+      # Empty = the bundled mosquitto below. Your own broker: tcp://host:1883 or ssl://host:8883
+      url: ""
+      maxPerSec: 50
+    public-broker:
+      url: wss://mqtt-us-v1.letsmesh.net:443/ # needs a subscribe-only account from the operator
+      maxPerSec: 200
+  flushAge: 5m
+  mqtt:
+    username: observer
+    # Password: --set ingester.mqtt.password=... or existingSecret (keys: username, password).
+    # If neither, a random one is generated (right for the bundled mosquitto only).
+    existingSecret: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# Local broker for the own-observer setting (as in docker-compose): your observer
+# publishes to host port 1883 (k3d maps it) with ingester.mqtt.username + the password.
+mosquitto:
+  enabled: true # only deployed when ingester.source is own-observer
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {cpu: 200m, memory: 64Mi}
+
+api:
+  replicas: 2 # stateless: reads summaries from S3
+  nodePort: 30080 # k3d maps a host port to this (deploy/k3d/cluster.yaml)
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {cpu: 250m, memory: 128Mi}
+
+analytics:
+  # Cron in UTC. Keep in sync with the freshness alerts in dashboards/alerts.yml (2x schedule).
+  jobs:
+    topology:
+      schedule: "7 * * * *" # hourly
+      activeDeadlineSeconds: 1800
+      dem: false
+      # Measured on the 2 h fixture: peak 156 MiB. A real 24 h window is larger.
+      resources:
+        requests: {cpu: 250m, memory: 256Mi}
+        limits: {cpu: "1", memory: 1Gi}
+    propagation:
+      schedule: "17 2 * * *" # nightly
+      activeDeadlineSeconds: 3600
+      dem: true
+      # Measured: peak 476 MiB (one GLO-30 tile as float64 is ~104 MB).
+      resources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {cpu: "1", memory: 1536Mi}
+    placement:
+      schedule: "47 2 * * *" # nightly, after propagation
+      activeDeadlineSeconds: 3600
+      dem: true
+      # Measured: peak 500 MiB, 1,400 candidate cells.
+      resources:
+        requests: {cpu: 500m, memory: 512Mi}
+        limits: {cpu: "2", memory: 1536Mi}
+  backoffLimit: 2
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  demStorage: 1Gi # Copernicus GLO-30 tile cache (~40 MB per 1x1 degree tile)
+  fetchDemResources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+prometheus:
+  retention: 7d
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  # Alert rules, injected by the Makefile: --set-file prometheus.rules=dashboards/alerts.yml
+  rules: ""
+
+grafana:
+  nodePort: 30300
+  resources:
+    requests: {cpu: 50m, memory: 192Mi}
+    limits: {cpu: 500m, memory: 384Mi}
+  # Dashboard JSON, injected by the Makefile: --set-file grafana.dashboard=dashboards/meshtwin.json
+  dashboard: ""
+
+# TEST DATA ONLY (values-smoke.yaml): load the synthetic fixture into the bucket.
+smoke:
+  seedFixtures: false
+  fixturesImage: meshtwin/fixtures:smoke

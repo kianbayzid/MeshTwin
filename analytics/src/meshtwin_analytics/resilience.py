@@ -60,7 +60,7 @@ def _share(pairs: int, n: int) -> float:
     return pairs / total if total else 0.0
 
 
-def _main_group(g: "nx.Graph[str]") -> set[str]:
+def main_group(g: "nx.Graph[str]") -> set[str]:
     """Nodes touching the largest relay component: 'connected to the backbone'."""
     relays = _relays(g)
     comps = list(nx.connected_components(g.subgraph(relays)))
@@ -111,7 +111,7 @@ def analyse(g: "nx.Graph[str]") -> Resilience:
     """
     reach = reach_sets(g)
     base = reachable_pairs(reach)
-    main = _main_group(g)
+    main = main_group(g)
     relays = _relays(g)
     aps = set(nx.articulation_points(g.subgraph(relays)))
 
@@ -124,7 +124,7 @@ def analyse(g: "nx.Graph[str]") -> Resilience:
         lost = base - len(reach[r]) - after
         if lost <= 0:
             continue
-        cut = len((main - {r}) - _main_group(h))
+        cut = len((main - {r}) - main_group(h))
         spofs.append(
             Spof(
                 node=r,

@@ -9,9 +9,11 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=2.0.0",
+    "imagecodecs>=2024.6.1",
     "networkx>=3.7",
     "numpy>=2.5.4",
     "pyarrow>=26.0.1",
+    "tifffile>=2022.4.22",
 ]
 
 [project.scripts]

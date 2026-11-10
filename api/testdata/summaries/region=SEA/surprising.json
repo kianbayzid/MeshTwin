@@ -1,0 +1,615 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "region": "SEA",
+    "generated_at": "2026-11-09T06:49:18Z",
+    "window": {
+      "from": "2026-10-31T02:00:06Z",
+      "to": "2026-11-01T02:00:06Z"
+    },
+    "source": "propagation-job"
+  },
+  "observed_but_predicted_impossible": [],
+  "predicted_strong_but_never_seen": [
+    {
+      "a": "83724B5C",
+      "b": "DB5D4F5B",
+      "distance_km": 6.8,
+      "predicted_snr_db": 33.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "5541F64A",
+      "b": "F2B6A7F1",
+      "distance_km": 6.4,
+      "predicted_snr_db": 32.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "04080AC9",
+      "b": "351FC1F9",
+      "distance_km": 5.8,
+      "predicted_snr_db": 32.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "705048BF",
+      "b": "F2B6A7F1",
+      "distance_km": 6.8,
+      "predicted_snr_db": 32.0,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "133358BF",
+      "b": "F2B6A7F1",
+      "distance_km": 7.6,
+      "predicted_snr_db": 31.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "04080AC9",
+      "b": "728503DF",
+      "distance_km": 8.0,
+      "predicted_snr_db": 29.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "728503DF",
+      "b": "FDC42289",
+      "distance_km": 8.3,
+      "predicted_snr_db": 29.6,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "133358BF",
+      "b": "403502EE",
+      "distance_km": 8.5,
+      "predicted_snr_db": 29.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "058F237E",
+      "b": "DB5D4F5B",
+      "distance_km": 8.5,
+      "predicted_snr_db": 29.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "DB5D4F5B",
+      "b": "F2B6A7F1",
+      "distance_km": 9.7,
+      "predicted_snr_db": 29.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "705048BF",
+      "b": "83724B5C",
+      "distance_km": 8.9,
+      "predicted_snr_db": 28.8,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "651B8520",
+      "b": "C81FCECD",
+      "distance_km": 9.7,
+      "predicted_snr_db": 28.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "403502EE",
+      "b": "9298462B",
+      "distance_km": 9.5,
+      "predicted_snr_db": 28.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "133358BF",
+      "b": "C81FCECD",
+      "distance_km": 9.2,
+      "predicted_snr_db": 28.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "3491927B",
+      "b": "611E395A",
+      "distance_km": 9.3,
+      "predicted_snr_db": 28.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "611E395A",
+      "b": "DB5D4F5B",
+      "distance_km": 9.7,
+      "predicted_snr_db": 28.3,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "2FAB47CC",
+      "b": "705048BF",
+      "distance_km": 9.7,
+      "predicted_snr_db": 28.2,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "57F2A227",
+      "b": "C81FCECD",
+      "distance_km": 9.7,
+      "predicted_snr_db": 28.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "058F237E",
+      "b": "9298462B",
+      "distance_km": 9.4,
+      "predicted_snr_db": 28.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "BC013AB3",
+      "b": "C81FCECD",
+      "distance_km": 10.1,
+      "predicted_snr_db": 28.0,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "A48EDEA2",
+      "b": "C81FCECD",
+      "distance_km": 9.8,
+      "predicted_snr_db": 27.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "058F237E",
+      "b": "C81FCECD",
+      "distance_km": 9.6,
+      "predicted_snr_db": 27.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "83724B5C",
+      "b": "B67F9DEC",
+      "distance_km": 10.7,
+      "predicted_snr_db": 27.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "A48EDEA2",
+      "b": "DB5D4F5B",
+      "distance_km": 10.0,
+      "predicted_snr_db": 27.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "C69C9AEB",
+      "b": "E8E2EFE6",
+      "distance_km": 10.3,
+      "predicted_snr_db": 27.2,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "133358BF",
+      "b": "A48EDEA2",
+      "distance_km": 10.8,
+      "predicted_snr_db": 27.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "2FAB47CC",
+      "b": "605D524B",
+      "distance_km": 11.2,
+      "predicted_snr_db": 27.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "058F237E",
+      "b": "2FAB47CC",
+      "distance_km": 11.2,
+      "predicted_snr_db": 27.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "C69C9AEB",
+      "b": "FDC42289",
+      "distance_km": 10.7,
+      "predicted_snr_db": 27.0,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "57F2A227",
+      "b": "DB5D4F5B",
+      "distance_km": 10.6,
+      "predicted_snr_db": 26.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "5541F64A",
+      "b": "705048BF",
+      "distance_km": 11.6,
+      "predicted_snr_db": 26.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "413E0EF4",
+      "b": "C69C9AEB",
+      "distance_km": 10.7,
+      "predicted_snr_db": 26.9,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "60C5383B",
+      "b": "B67F9DEC",
+      "distance_km": 10.5,
+      "predicted_snr_db": 26.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "5541F64A",
+      "b": "B67F9DEC",
+      "distance_km": 11.0,
+      "predicted_snr_db": 26.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "2FAB47CC",
+      "b": "5541F64A",
+      "distance_km": 11.2,
+      "predicted_snr_db": 26.7,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "705048BF",
+      "b": "BC013AB3",
+      "distance_km": 11.1,
+      "predicted_snr_db": 26.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "611E395A",
+      "b": "728503DF",
+      "distance_km": 11.3,
+      "predicted_snr_db": 26.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "60C5383B",
+      "b": "BC013AB3",
+      "distance_km": 11.6,
+      "predicted_snr_db": 26.5,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "058F237E",
+      "b": "611E395A",
+      "distance_km": 12.0,
+      "predicted_snr_db": 26.4,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "651B8520",
+      "b": "DB5D4F5B",
+      "distance_km": 11.9,
+      "predicted_snr_db": 26.3,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "2FAB47CC",
+      "b": "403502EE",
+      "distance_km": 11.3,
+      "predicted_snr_db": 26.3,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "133358BF",
+      "b": "57F2A227",
+      "distance_km": 11.6,
+      "predicted_snr_db": 26.2,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "133358BF",
+      "b": "9F7D96C2",
+      "distance_km": 11.3,
+      "predicted_snr_db": 26.2,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "605D524B",
+      "b": "611E395A",
+      "distance_km": 12.0,
+      "predicted_snr_db": 26.2,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "2FAB47CC",
+      "b": "60C5383B",
+      "distance_km": 11.7,
+      "predicted_snr_db": 26.2,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "B67F9DEC",
+      "b": "F2B6A7F1",
+      "distance_km": 12.3,
+      "predicted_snr_db": 26.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "605D524B",
+      "b": "BC013AB3",
+      "distance_km": 12.4,
+      "predicted_snr_db": 26.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "403502EE",
+      "b": "BC013AB3",
+      "distance_km": 11.9,
+      "predicted_snr_db": 26.1,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "5541F64A",
+      "b": "DB5D4F5B",
+      "distance_km": 11.8,
+      "predicted_snr_db": 26.0,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    },
+    {
+      "a": "058F237E",
+      "b": "BC013AB3",
+      "distance_km": 12.4,
+      "predicted_snr_db": 25.8,
+      "both_active": true,
+      "possible_reasons": [
+        "building clutter",
+        "antenna/feedline fault",
+        "node misconfigured"
+      ]
+    }
+  ]
+}

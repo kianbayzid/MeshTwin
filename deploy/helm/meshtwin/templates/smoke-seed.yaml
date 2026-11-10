@@ -1,0 +1,51 @@
+{{- if .Values.smoke.seedFixtures }}
+{{- $c := dict "root" $ "component" "smoke-seed" }}
+# TEST DATA ONLY (values-smoke.yaml). Copies the repo's SYNTHETIC fixture
+# testdata/parquet/sea-seed1-2h-hash1 (CI/test data, no real packets) into the
+# bucket so the CronJobs and the map have something to show in the k3d smoke test.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-smoke-seed
+  annotations:
+    # Runs after every install/upgrade once the pods are ready; the deploy waits for it.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+  labels:
+    {{- include "meshtwin.labels" $c | nindent 4 }}
+    meshtwin.io/test-data: "true"
+spec:
+  backoffLimit: 6 # retries while SeaweedFS is still starting
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "meshtwin.labels" $c | nindent 8 }}
+        meshtwin.io/test-data: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- include "meshtwin.podSecurity" 10001 | nindent 8 }}
+      containers:
+        - name: seed
+          image: {{ .Values.smoke.fixturesImage }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          command: [python, -c]
+          args:
+            - |
+              from pyarrow import fs
+              from meshtwin_analytics.storage import S3Config
+              fs.copy_files("/fixtures", "{{ .Values.s3.bucket }}",
+                            destination_filesystem=S3Config.from_env().arrow_filesystem())
+              print("seeded TEST fixture sea-seed1-2h-hash1 into s3://{{ .Values.s3.bucket }}")
+          env: {{- include "meshtwin.s3Env" . | nindent 12 }}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}

@@ -1,4 +1,4 @@
-"""Where data lives: a local directory or an S3/MinIO bucket.
+"""Where data lives: a local directory or an S3-compatible bucket (SeaweedFS, S3 port 8333).
 
 Reads go through DuckDB (httpfs for S3); writes go through a pyarrow filesystem.
 Both are configured from the same env vars the Go ingester uses
@@ -16,21 +16,21 @@ from pyarrow import fs
 
 @dataclass(frozen=True)
 class S3Config:
-    endpoint: str  # host:port, no scheme (MinIO style)
+    endpoint: str  # host:port, no scheme
     access_key: str
     secret_key: str
     tls: bool
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "S3Config":
-        endpoint = env.get("S3_ENDPOINT", "localhost:9000")
-        # Accept "http://minio:9000" too, and let the scheme decide TLS when S3_TLS is unset.
+        endpoint = env.get("S3_ENDPOINT", "localhost:8333")
+        # Accept "http://seaweedfs:8333" too, and let the scheme decide TLS when S3_TLS is unset.
         tls = env.get("S3_TLS", "true" if endpoint.startswith("https://") else "false") == "true"
         endpoint = endpoint.removeprefix("http://").removeprefix("https://")
         return cls(endpoint, env.get("S3_ACCESS_KEY", ""), env.get("S3_SECRET_KEY", ""), tls)
 
     def duckdb_secret_sql(self) -> str:
-        """DuckDB httpfs secret. Path-style URLs because MinIO serves buckets as paths."""
+        """DuckDB httpfs secret. Path-style URLs because SeaweedFS serves buckets as paths."""
 
         def q(s: str) -> str:
             return "'" + s.replace("'", "''") + "'"

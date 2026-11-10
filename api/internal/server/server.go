@@ -1,0 +1,282 @@
+// Package server is the read-only REST API and map page (docs/api-contract.md).
+package server
+
+import (
+	"context"
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"maps"
+	"net/http"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"meshtwin/api/internal/store"
+)
+
+//go:embed static
+var embedded embed.FS
+
+// Embedded is the map page compiled into the binary. static/ is checked at
+// compile time by go:embed, so Sub cannot fail.
+var Embedded, _ = fs.Sub(embedded, "static")
+
+var errInvalid = errors.New("summary failed validation")
+
+// Server serves summaries from a Store. Loaded summaries are validated once
+// and cached for TTL.
+type Server struct {
+	store  store.Store
+	static fs.FS
+	ttl    time.Duration
+	now    func() time.Time
+
+	mu    sync.Mutex
+	cache map[string]entry
+}
+
+type entry struct {
+	v   any
+	err error
+	at  time.Time
+}
+
+// New returns a Server. static is the map page (Embedded, or os.DirFS for a
+// dev override); ttl is how long a loaded summary is reused.
+func New(st store.Store, static fs.FS, ttl time.Duration) *Server {
+	return &Server{store: st, static: static, ttl: ttl, now: time.Now, cache: map[string]entry{}}
+}
+
+// Handler returns every route wrapped in security headers and metrics.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("GET /readyz", s.readyz)
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /api/v1/regions", s.regions)
+	mux.HandleFunc("GET /api/v1/regions/{region}/topology", s.summaryHandler("topology", topologyQuery))
+	mux.HandleFunc("GET /api/v1/regions/{region}/resilience", s.summaryHandler("resilience", nil))
+	mux.HandleFunc("GET /api/v1/regions/{region}/links/residuals", s.summaryHandler("residuals", residualsQuery))
+	mux.HandleFunc("GET /api/v1/regions/{region}/links/surprising", s.summaryHandler("surprising", nil))
+	mux.HandleFunc("GET /api/v1/regions/{region}/placement", s.summaryHandler("placement", placementQuery))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, s.static, "index.html") })
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(s.static)))
+	return instrument(mux)
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if _, err := s.store.List(ctx); err != nil {
+		slog.Warn("summary store not reachable", "err", err)
+		http.Error(w, "summary store not reachable", http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = w.Write([]byte("ready\n"))
+}
+
+func (s *Server) summaryHandler(name string, q query) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// ASCII check first: strings.ToUpper maps "ſ" to "S" and the Kelvin sign to "K".
+		raw := r.PathValue("region")
+		region := strings.ToUpper(raw)
+		if strings.ContainsFunc(raw, func(c rune) bool { return c > unicode.MaxASCII }) || !store.ValidRegion(region) {
+			writeError(w, http.StatusBadRequest, "bad_request", "region must be 2-8 ASCII letters or digits")
+			return
+		}
+		var rewrite func([]byte) ([]byte, error)
+		if q != nil {
+			var err error
+			if rewrite, err = q(r.URL.Query()); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), errBadRequest.Error()+": "))
+				return
+			}
+		}
+		data, err := s.summary(r.Context(), region, name)
+		if err != nil {
+			s.writeLoadError(w, r, region, name, err)
+			return
+		}
+		if rewrite != nil {
+			if data, err = rewrite(data); err != nil {
+				slog.Error("rewrite summary", "region", region, "summary", name, "err", err)
+				writeError(w, http.StatusInternalServerError, "internal", "could not process the summary")
+				return
+			}
+		}
+		writeJSON(w, r, data)
+	}
+}
+
+// summary returns a validated summary, re-encoded from what was checked. A
+// file that breaks a rule is never served: it is logged, counted, and reported
+// to the client as not_ready with a generic message (the reason stays in our logs).
+func (s *Server) summary(ctx context.Context, region, name string) ([]byte, error) {
+	return cached(s, region+"/"+name, func() ([]byte, error) {
+		b, err := s.store.Get(ctx, region, name)
+		switch {
+		case errors.Is(err, store.ErrTooLarge): // rejected like a file that fails validation
+		case err != nil:
+			return nil, err
+		default:
+			b, err = validate(region, name, b)
+		}
+		if err != nil {
+			validationFailures.WithLabelValues(name).Inc()
+			slog.Error("summary failed validation; not serving it", "region", region, "summary", name, "err", err)
+			return nil, fmt.Errorf("%w: %w", errInvalid, err)
+		}
+		recordGenerated(region, name, b)
+		return b, nil
+	})
+}
+
+func (s *Server) list(ctx context.Context) (map[string][]string, error) {
+	return cached(s, "", func() (map[string][]string, error) { return s.store.List(ctx) })
+}
+
+// cached memoises fetch under key for s.ttl. Results that will not change by
+// retrying now (a value, a missing file, a rejected file) are cached; storage
+// errors are not, so an outage clears as soon as storage is back.
+// shortcut: concurrent misses on one key each fetch (no singleflight); fine at
+// a handful of summaries per region, add x/sync/singleflight if storage load matters.
+func cached[T any](s *Server, key string, fetch func() (T, error)) (T, error) {
+	s.mu.Lock()
+	e, ok := s.cache[key]
+	s.mu.Unlock()
+	if ok && s.now().Sub(e.at) < s.ttl {
+		v, _ := e.v.(T)
+		return v, e.err
+	}
+	v, err := fetch()
+	if err == nil || errors.Is(err, store.ErrNotFound) || errors.Is(err, errInvalid) {
+		s.mu.Lock()
+		s.cache[key] = entry{v: v, err: err, at: s.now()}
+		s.mu.Unlock()
+	}
+	return v, err
+}
+
+// writeLoadError maps a load failure to the contract's codes: a region with
+// no summaries at all is 404; a region that has some, but not this one (or
+// this one was rejected, or storage is down), is 503 not_ready.
+func (s *Server) writeLoadError(w http.ResponseWriter, r *http.Request, region, name string, err error) {
+	switch {
+	case errors.Is(err, errInvalid):
+		writeError(w, http.StatusServiceUnavailable, "not_ready", fmt.Sprintf("%s for region %s is not available", name, region))
+	case errors.Is(err, store.ErrNotFound):
+		list, lerr := s.list(r.Context())
+		if lerr == nil && len(list[region]) == 0 {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no summaries for region %s", region))
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "not_ready", fmt.Sprintf("no %s for region %s yet", name, region))
+	default:
+		slog.Error("load summary", "region", region, "summary", name, "err", err)
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "summary store unavailable")
+	}
+}
+
+type regionInfo struct {
+	Region    string     `json:"region"`
+	UpdatedAt *time.Time `json:"updated_at"`
+	Nodes     *int       `json:"nodes"`
+	Links     *int       `json:"links"`
+	Summaries []string   `json:"summaries"`
+}
+
+// regions lists regions with at least one servable summary. A rejected
+// summary is left out of "summaries", so the list only names what the API
+// will actually return.
+func (s *Server) regions(w http.ResponseWriter, r *http.Request) {
+	list, err := s.list(r.Context())
+	if err != nil {
+		slog.Error("list summaries", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "summary store unavailable")
+		return
+	}
+	out := []regionInfo{}
+	for _, region := range slices.Sorted(maps.Keys(list)) {
+		info := regionInfo{Region: region, Summaries: []string{}}
+		for _, name := range list[region] {
+			data, err := s.summary(r.Context(), region, name)
+			if err != nil {
+				continue
+			}
+			info.Summaries = append(info.Summaries, name)
+			var head struct {
+				Meta struct {
+					GeneratedAt time.Time `json:"generated_at"`
+				} `json:"meta"`
+				Stats *struct {
+					Nodes int `json:"nodes"`
+					Links int `json:"links"`
+				} `json:"stats"`
+			}
+			if json.Unmarshal(data, &head) != nil {
+				continue
+			}
+			if t := head.Meta.GeneratedAt.UTC(); info.UpdatedAt == nil || t.After(*info.UpdatedAt) {
+				info.UpdatedAt = &t
+			}
+			if name == "topology" && head.Stats != nil {
+				info.Nodes, info.Links = &head.Stats.Nodes, &head.Stats.Links
+			}
+		}
+		if len(info.Summaries) > 0 {
+			out = append(out, info)
+		}
+	}
+	data, err := json.Marshal(map[string]any{"regions": out})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "encode regions")
+		return
+	}
+	writeJSON(w, r, data)
+}
+
+// writeJSON sends data with an ETag of exactly these bytes (the validated,
+// re-encoded summary, after any filtering), so a filtered response gets its
+// own. A matching If-None-Match gets 304 and no body.
+func writeJSON(w http.ResponseWriter, r *http.Request, data []byte) {
+	sum := sha256.Sum256(data)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	h := w.Header()
+	h.Set("ETag", etag)
+	h.Set("Cache-Control", "max-age=60")
+	if etagMatch(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
+
+// etagMatch implements If-None-Match's weak comparison: "*", or any listed
+// tag equal to ours with or without a W/ prefix.
+func etagMatch(header, etag string) bool {
+	for _, t := range strings.Split(header, ",") {
+		t = strings.TrimPrefix(strings.TrimSpace(t), "W/")
+		if t == "*" || t == etag {
+			return true
+		}
+	}
+	return false
+}
+
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store") // a 503 must not stick in caches for a minute
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": msg}})
+}

@@ -224,5 +224,5 @@ Quirks the ingester must handle:
 | Observers publish duplicates (meshcore-ha: no, within 1 s) | count `(hash, observer)` repeats in the capture | when a capture exists |
 | Timestamp timezone in meshcoretomqtt | its source, `datetime.now()` call (handled either way: no offset → receive time) | when a capture exists |
 | ~~Room servers forward floods?~~ **Resolved 2026-11-08:** not by default (see §2) | `examples/simple_room_server` | done |
-| US default radio preset (freq/BW/SF) | MeshCore app presets / docs | Phase 4 (radio model) |
+| ~~US default radio preset~~ **Resolved 2026-11-08:** 910.525 MHz, BW 62.5 kHz, SF7, CR5 (official preset API `api.meshcore.nz/api/v1/config`, `docs/faq.md` §2.3; Puget Mesh uses the same). The **build** default is EU (869.618 MHz, SF8, `platformio.ini`): US radios get the preset from the app/flasher, so never infer frequency from firmware. TX 22 dBm on Heltec V3 / RAK4631 (`variants/*/platformio.ini`), boosted RX gain on. SX1262 demod SNR floor SF7 -7.5 dB ... SF12 -20 dB (datasheet Rev 1.2 Table 6-1); NF about 6-6.5 dB, derived from Table 3-8 sensitivity (not stated). Antenna gain and cable loss are not in firmware: **UNVERIFIED** per site. | preset API, faq.md, SX1262 datasheet | done |
 | Transport code semantics | `examples/*` `allowPacketForward` | only if needed |

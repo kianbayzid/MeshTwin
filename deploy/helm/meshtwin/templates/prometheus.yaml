@@ -1,0 +1,123 @@
+{{- $c := dict "root" $ "component" "prometheus" }}
+# Prometheus finds the ingester and API pods by Kubernetes pod discovery in this
+# namespace only (Role, not ClusterRole), so each of the 2 API replicas is its
+# own target and per-replica gauges aren't mixed by a Service load balancer.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-prometheus
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 30s
+    rule_files: [/etc/prometheus/alerts.yml]
+    scrape_configs:
+      - job_name: meshtwin
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces: {names: [{{ .Release.Namespace }}]}
+        relabel_configs:
+          # Keep this release's ingester and api pods, on their port named "http".
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            regex: {{ .Release.Name }}
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            regex: ingester|api
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            regex: http
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            target_label: component
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+  alerts.yml: |
+    {{- .Values.prometheus.rules | default "groups: []" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+      annotations:
+        checksum/config: {{ printf "%s%s" .Values.prometheus.rules .Release.Namespace | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-prometheus
+      securityContext: {{- include "meshtwin.podSecurity" 65534 | nindent 8 }}
+      containers:
+        - name: prometheus
+          image: {{ .Values.images.prometheus }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+          ports:
+            - {name: http, containerPort: 9090}
+          livenessProbe:
+            httpGet: {path: /-/healthy, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /-/ready, port: http}
+            periodSeconds: 10
+          resources: {{- toYaml .Values.prometheus.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/prometheus, readOnly: true}
+            - {name: data, mountPath: /prometheus}
+      volumes:
+        - name: config
+          configMap: {name: {{ .Release.Name }}-prometheus}
+        # shortcut: metrics are lost when the pod moves; use a PVC if history matters.
+        - name: data
+          emptyDir: {sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "meshtwin.selector" $c | nindent 4 }}
+  ports:
+    - {name: http, port: 9090, targetPort: http}

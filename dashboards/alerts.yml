@@ -1,0 +1,45 @@
+# Prometheus alert rules for MeshTwin. Loaded by the chart:
+#   --set-file prometheus.rules=dashboards/alerts.yml   (the Makefile does this)
+groups:
+  - name: meshtwin
+    rules:
+      # Freshness: a summary older than 2x the schedule of the job that writes it
+      # (deploy/helm/meshtwin/values.yaml: topology hourly -> topology, resilience;
+      # propagation nightly -> residuals, surprising; placement nightly -> placement).
+      # max by: each API replica exports the gauge; the newest view counts.
+      # The gauge refreshes when an API replica reloads a summary; the readiness
+      # probe (GET /api/v1/regions every 30 s) guarantees that without user traffic.
+      - alert: MeshTwinSummaryStale
+        expr: |
+          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary=~"topology|resilience"})) > 2 * 3600
+          or
+          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary=~"residuals|surprising|placement"})) > 2 * 86400
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.region }} {{ $labels.summary }}.json is {{ $value | humanizeDuration }} old"
+          description: "Older than twice its CronJob schedule: check the analytics CronJob's last run (kubectl get jobs)."
+
+      # Any rejected summary is a contract or privacy problem, not noise.
+      - alert: MeshTwinSummaryValidationFailures
+        expr: sum by (summary) (increase(meshtwin_api_summary_validation_failures_total[15m])) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "API rejected {{ $labels.summary }} summaries in the last 15 min"
+          description: "A summary failed the privacy/contract checks and is not served. See the API logs."
+
+      - alert: MeshTwinIngesterDown
+        expr: absent(up{component="ingester"} == 1)
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "No ingester is up (scrape failing or pod missing)"
+          description: "Packets are not being stored. Check the ingester pod and its readiness (/readyz)."
+
+      - alert: MeshTwinIngesterBrokerDisconnected
+        expr: max(meshtwin_ingest_mqtt_connected) == 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Ingester is not subscribed to the MQTT broker"
+          description: "Check the broker URL and credentials Secret; the ingester retries with backoff."

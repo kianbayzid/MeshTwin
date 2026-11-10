@@ -1,7 +1,8 @@
 # MeshTwin analytics
 
 Python (uv) jobs that turn the ingester's Parquet into a link graph, a resilience
-report and JSON summaries for the API. Phase 3: topology and resilience.
+report and JSON summaries for the API. Phase 3: topology and resilience. Phase 4: terrain
+propagation and predicted-vs-observed SNR. Phase 5: where to put the next repeater.
 
 ```sh
 uv sync
@@ -26,6 +27,10 @@ sets how far back the node registry looks (see below). `--min-confidence 0.5` dr
 | `resilience.py` | relay-aware reachability, SPOFs, bridges |
 | `summaries.py` / `output.py` | contract JSON + internal Parquet, and writing them |
 | `evaluate.py` | scoring against `truth.json` |
+| `terrain.py` | `Terrain` interface: flat, grid (bilinear), Copernicus GLO-30 tiles + download |
+| `propagation.py` | `Radio` assumptions, `PropagationModel` interface, `FsplKnifeEdge` |
+| `compare.py` | residuals per measured link, surprising pairs, their JSON |
+| `placement.py` | candidate grid cells, predicted new links, reachability gain, score, JSON |
 | `pipeline.py` / `cli.py` | wiring, timings, command line |
 
 ## The algorithm in plain words
@@ -175,6 +180,173 @@ SPOF sets are compared.
 The collision cost on hash1: both false links (confidence 0.525 and 0.502) and 10 of the 11
 missed relay links involve the `60` pair of repeaters, which sit close together, so geography
 can't separate them.
+
+## Propagation (Phase 4)
+
+```sh
+uv run meshtwin-analytics fetch-dem --bbox 47.42,-122.40,47.79,-122.03 --dem-dir "$LOCALAPPDATA/meshtwin/dem"
+uv run meshtwin-analytics propagation --root ../testdata/parquet/sea-seed1-2h-hash1 --region SEA \
+    --dem-dir "$LOCALAPPDATA/meshtwin/dem" --out ./out
+```
+
+`propagation` takes the same window options as `topology`, runs the topology inference once, and
+writes `summaries/region=SEA/residuals.json` and `surprising.json` (`docs/api-contract.md`). Without
+`--dem-dir` the ground is flat (sea level) and `model.dem` says `"flat (no DEM)"`. `fetch-dem`
+downloads the 1°×1° tiles covering the box from AWS Open Data (one at a time, to `.part` then
+renamed, skipping tiles already there; a 404 means open sea and is skipped). **Keep the cache
+outside the repo; DEM tiles are never committed.**
+
+**Reader: `tifffile` + `imagecodecs`.** GLO-30 COGs use DEFLATE with the floating-point predictor,
+which tifffile decodes only with imagecodecs; both are pure wheels that load fine under Windows
+Application Control, whereas rasterio drags in all of GDAL for reading one array.
+
+### The model in plain words
+For each pair of sites:
+1. **Profile.** Sample the ground every ~30 m (the DEM resolution, capped at 2,000 points) on the
+   straight lat/lon line between them; add the Earth's bulge `d1·d2 / (2·k·R)` with k = 4/3
+   (refraction makes the Earth look flatter, ~8,500 km radius, ITU-R P.526-16 §1).
+2. **The ray.** A straight line from antenna A (ground + height) to antenna B.
+3. **Clearance.** At every point: how far the ground is below the ray, divided by the radius of the
+   first Fresnel zone `sqrt(λ·d1·d2/d)`. `fresnel_clearance` is the minimum (negative = blocked);
+   `line_of_sight` = no point above the ray. 0.6 or more is the classic "clear" rule.
+4. **One knife edge.** The worst point becomes a knife edge with
+   `v = h·sqrt(2(d1+d2)/(λ·d1·d2))` (P.526-16 Eq. 26; equal to `−√2 × clearance`), and loss
+   `J(v) = 6.9 + 20·log10(sqrt((v−0.1)²+1) + v − 0.1)` for v > −0.78, else 0 (Eq. 31). J(0) = 6 dB:
+   an edge exactly on the ray halves the field.
+5. **Link budget.** `path loss = FSPL + J`, `FSPL = 20·log10(d_km) + 20·log10(f_MHz) + 32.44`,
+   `predicted SNR = TX + gains − path loss − noise floor`, noise floor = `−174 + 10·log10(BW) + NF`.
+
+The model is behind `PropagationModel.predict(a: Site, b: Site)`, so a better one (Deygout,
+Longley-Rice) drops in without touching `compare.py`.
+
+| assumption | value | source |
+|---|---|---|
+| frequency / bandwidth / SF / CR | 910.525 MHz / 62.5 kHz / 7 / 4/5 | MeshCore US preset (api.meshcore.nz/api/v1/config, MeshCore docs/faq.md §2.3) |
+| TX power | 22 dBm | `LORA_TX_POWER`, heltec_v3 and rak4631 `platformio.ini` |
+| noise figure | 6 dB → noise floor −120.0 dBm | derived from SX1262 datasheet Table 3-8 sensitivity |
+| demodulation floor | SF7 −7.5 … SF12 −20 dB | SX1262 datasheet Rev 1.2 Table 6-1 |
+| antenna gain | 0 dBi each end | **UNVERIFIED** site assumption |
+| antenna height | repeater/room 10 m; companion/sensor/unknown 2 m | **UNVERIFIED** site assumption |
+
+### Residuals and surprises
+- **Residuals:** every exported link (confidence ≥ 0.5) with measured last-hop SNR and both ends
+  located: `residual = observed median − predicted`. Summary: count, median |residual|, RMSE, bias
+  (mean residual). Sorted by |residual|, worst first.
+- **Observed but predicted impossible:** measured links the model puts below the demodulation floor.
+- **Predicted strong but never seen:** pairs of relays (repeaters + inferred relays), both located,
+  both heard in the window, ≤ 30 km apart, predicted ≥ floor + 10 dB, with **no** inferred link at
+  any confidence. Top 50 by predicted SNR.
+- Reasons are a fixed list of hypotheses to check, not a diagnosis.
+
+**Privacy.** Ids and roles follow the topology rules. `distance_km` is measured between the
+**snapped** cell centres and rounded to 0.1 km, so it says nothing finer than the published grid
+(a test recomputes it from `topology.json` cells). The predicted SNR, though, is computed from the
+exact positions: a weak side channel (moving a node within its cell shifts the prediction by
+up to a few dB on short links; recovering a point from it would need the model, the DEM and
+several links to that node), accepted.
+
+### Limitations
+- **One edge.** Several ridges in a row are under-counted (predicted too strong); Deygout is the
+  upgrade. A knife edge also under-states smooth-Earth loss (60 km at 2 m: 14 dB).
+- **No clutter.** No buildings or vegetation loss beyond what the DEM contains.
+- **The DEM is a surface model (DSM):** it includes tree and roof tops in places, so in forested
+  Seattle it over-predicts blockage for antennas below the canopy.
+- **Unknown real antennas.** Heights, gains and cable losses vary per install; that appears as a
+  bias term, and per-node residuals are where to look for it.
+- **Observed SNR saturates** near +14 dB on SX126x radios, so strong links always look worse than
+  predicted.
+
+### Measured (seed 1, 2 h, hash1 fixture)
+| | flat | Copernicus GLO-30 |
+|---|---:|---:|
+| residual links | 85 | 85 |
+| median \|residual\| / RMSE / bias (dB) | 29.8 / 30.7 / −30.3 | 14.6 / 19.1 / −14.9 |
+| line of sight | 85 | 18 |
+| observed but predicted impossible | 0 | 1 |
+| predicted strong but never seen (cap 50) | 50 | 50 |
+| propagation step (410 profiles) | 0.035–0.05 s (~8–12k profiles/s) | 0.06–0.07 s (~5.5–7k profiles/s) + 0.15 s DEM load |
+| `propagation` wall clock (incl. topology) | 2.0 s | 2.2 s |
+
+The synthetic generator uses log-distance with exponent 7.5 and no terrain, so the large negative
+bias on synthetic data is expected; the model is **not** tuned to it. What the fixture does validate
+is the observed half: the observed median per link matches the generator's true link SNR
+(clamped at 14 dB) with a median absolute difference of **0.063 dB** (84 of 85 links are true
+links). The predicted half is validated by the physics tests (FSPL, J(v), ridge, Earth bulge).
+
+### DEM attribution
+> produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.
+> The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30.
+
+(Licence COP-DEM-GLO-30-F; see `docs/data-sources.md`.)
+
+## Placement (Phase 5)
+
+```sh
+uv run meshtwin-analytics placement --root ../testdata/parquet/sea-seed1-2h-hash1 --region SEA     --dem-dir "$LOCALAPPDATA/meshtwin/dem" --out ./out
+```
+
+Same window options as `topology`; writes `summaries/region=SEA/placement.json`
+(`docs/api-contract.md`). Without `--dem-dir` the ground is flat and no water filter runs.
+
+### The method in plain words
+1. **Candidates.** Every 0.01° grid-cell centre in the bounding box of the located nodes, padded by
+   one cell. With a DEM, cells whose centre is at or below 0.5 m are dropped as open water (Puget
+   Sound). These are the same cells `geo.snap` labels, so a candidate's location is public by
+   construction (a test checks `snap(cell) == cell`).
+2. **New links.** A repeater at the cell (10 m antenna, `Radio.infrastructure_height_m`) is
+   predicted against every located node within 30 km through the Phase 4 `PropagationModel`
+   interface. A link exists if predicted SNR ≥ demodulation floor + **5 dB** (`LINK_MARGIN_DB`: a
+   fade margin, and the model is optimistic).
+3. **Effect.** The candidate joins the Phase 3 graph (links with confidence ≥ 0.5) as a relay with
+   those links, and the relay-aware reachability is recomputed:
+   - `reachable_pairs_gained`: reachable pairs after − before, counted among **existing** nodes
+     only (the candidate's own pairs would reward linking to anything).
+   - `coverage_gain_nodes`: existing nodes outside the largest relay-connected group before and
+     inside it after.
+   - `spofs_removed`: current SPOFs (Phase 3) whose removal loses 0 pairs once the candidate is
+     there. One reachability pass per SPOF, so only the top 50 cells by pairs gained (ties: more
+     new links first) are checked; `method.spofs_checked_top` says so.
+4. **Score** in [0, 1]:
+   `score = 0.7 × pairs_gained / max pairs_gained over all cells + 0.3 × spofs_removed / total SPOFs`.
+   Reachability is what users feel, so it dominates; redundancy is the tie-breaker that matters.
+   It is **relative to the run**: 1.0 means "best cell in this run", not "perfect".
+5. **Output.** Top 50 (the API's maximum `top`) by score, then pairs gained, then lat, lon: fully
+   deterministic. `new_links` strongest first, ids are 8-hex prefixes, SNR to one decimal.
+
+Additive `method` fields (allowed by the contract's versioning rule): `dem` (`"Copernicus GLO-30"`
+or `"flat (no DEM)"`) and `spofs_checked_top` (50).
+
+### Assumptions and limitations
+- **No land-use, permission or access constraints.** A cell is a cell: a lake above sea level
+  (Lake Washington, ~6 m), a freeway or a park all pass. A real site needs a roof, power and an owner.
+- **Candidates are rooftop-agnostic grid cells**: ground at the cell centre + 10 m, whatever the
+  real building or hill top within the 1 km cell offers.
+- **The model is optimistic** (one knife edge, no clutter; Phase 4 bias −15 dB with the DEM,
+  −30 dB flat on the fixture). On this fixture the best cells reach 70+ of 73 located nodes, so many
+  cells tie on pairs gained and the ranking is decided by SPOFs removed and the position tie-break.
+  The 5 dB margin helps a little; calibrating the model on residuals is the real fix.
+- One new repeater at a time (greedy): the best *pair* of sites is not searched.
+- Nodes without a location can't get predicted links (they still count in the reachability).
+
+### Measured (seed 1, 2 h, hash1 fixture)
+| | flat | Copernicus GLO-30 |
+|---|---:|---:|
+| candidates scored | 1,520 | 1,400 (120 water cells dropped) |
+| profiles | 101,322 | 94,260 |
+| placement step | 6.7 s (~15k profiles/s) | 11.8 s (~8k profiles/s) + 0.19 s DEM load |
+| `placement` wall clock (incl. topology) | ~9 s | ~14 s |
+
+Single stage: well under the 60 s budget, so no distance/FSPL pre-filter beyond the 30 km cut.
+
+**Truth check (qualitative, not tuned to it).** The inferred relay graph has two islands: the main
+one (25 relays, around 47.65, −122.24) and an eastern one (5 relays, around 47.55, −122.07) that
+holds the two biggest true SPOFs (SEA-RPT-03, SEA-RPT-01); 27 nodes are outside the main group, the
+same as in `truth.json`. With the DEM, the top 5 cells (47.52–47.54, −122.09…−122.12) sit on the
+eastern island's west edge, 4–5 km from RPT-01 and 5–7 km from RPT-03, and bridge it to the main
+group (all 27 nodes join, +1,674 pairs) while removing 5 of the 6 SPOFs. Flat terrain puts rank 1
+further west (47.52, −122.18), between the islands. Both are the places a human would look at
+first; whether one repeater could really close a ~15 km gap is exactly what the optimistic model
+can't promise.
 
 ## Future work
 - EM-lite prior: after one pass, boost candidates that were resolved often, then resolve again.

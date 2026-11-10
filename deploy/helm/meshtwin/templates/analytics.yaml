@@ -1,0 +1,87 @@
+{{- /* One image, three CronJobs that differ only in the subcommand, schedule and size. */ -}}
+# Copernicus GLO-30 tile cache, shared by the jobs that use terrain. fetch-dem
+# skips tiles already present, so only the first run downloads (~40 MB/tile).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-dem
+  annotations:
+    # A hook, so `--wait` doesn't block on it: storage classes that bind on first
+    # consumer (k3d's local-path) leave it Pending until the first job runs.
+    # Upgrades leave it alone. Uninstall does not delete hook resources (kubectl
+    # delete pvc meshtwin-dem); a fresh install replaces it (before-hook-creation).
+    helm.sh/hook: pre-install
+  labels: {{- include "meshtwin.labels" (dict "root" $ "component" "analytics") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce] # single node; on a multi-node cluster use RWX or node affinity
+  resources:
+    requests:
+      storage: {{ .Values.analytics.demStorage }}
+{{- range $name, $job := .Values.analytics.jobs }}
+{{- $c := dict "root" $ "component" (printf "analytics-%s" $name) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid # a slow run is never overlapped by the next one
+  startingDeadlineSeconds: {{ $.Values.analytics.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ $.Values.analytics.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $.Values.analytics.failedJobsHistoryLimit }}
+  jobTemplate:
+    metadata:
+      labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+    spec:
+      backoffLimit: {{ $.Values.analytics.backoffLimit }}
+      activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels: {{- include "meshtwin.labels" $c | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext: {{- include "meshtwin.podSecurity" 10001 | nindent 12 }}
+          {{- if $job.dem }}
+          initContainers:
+            - name: fetch-dem
+              image: {{ $.Values.images.analytics }}
+              imagePullPolicy: {{ $.Values.pullPolicy }}
+              args: [fetch-dem, {{ printf "--bbox=%s" $.Values.bbox | quote }}, --dem-dir, /dem]
+              resources: {{- toYaml $.Values.analytics.fetchDemResources | nindent 16 }}
+              securityContext: {{- include "meshtwin.containerSecurity" $ | nindent 16 }}
+              volumeMounts:
+                - {name: dem, mountPath: /dem}
+                - {name: tmp, mountPath: /tmp}
+          {{- end }}
+          containers:
+            - name: {{ $name }}
+              image: {{ $.Values.images.analytics }}
+              imagePullPolicy: {{ $.Values.pullPolicy }}
+              args:
+                - {{ $name }}
+                - --root=s3://{{ $.Values.s3.bucket }}
+                - --out=s3://{{ $.Values.s3.bucket }}
+                - --region={{ $.Values.region }}
+                {{- if $job.dem }}
+                - --dem-dir=/dem
+                {{- end }}
+              env: {{- include "meshtwin.s3Env" $ | nindent 16 }}
+              resources: {{- toYaml $job.resources | nindent 16 }}
+              securityContext: {{- include "meshtwin.containerSecurity" $ | nindent 16 }}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+                {{- if $job.dem }}
+                - {name: dem, mountPath: /dem, readOnly: true}
+                {{- end }}
+          volumes:
+            - name: tmp
+              emptyDir: {sizeLimit: 256Mi}
+            {{- if $job.dem }}
+            - name: dem
+              persistentVolumeClaim: {claimName: {{ $.Release.Name }}-dem}
+            {{- end }}
+{{- end }}

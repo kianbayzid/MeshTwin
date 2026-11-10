@@ -1,0 +1,151 @@
+{{- if .Values.ingester.enabled }}
+{{- $c := dict "root" $ "component" "ingester" }}
+{{- $src := index .Values.ingester.sources .Values.ingester.source | required "ingester.source must be own-observer or public-broker" }}
+{{- $bundled := and (eq .Values.ingester.source "own-observer") .Values.mosquitto.enabled (not $src.url) }}
+{{- $url := ternary (printf "tcp://%s-mosquitto:1883" .Release.Name) $src.url $bundled }}
+{{- if not $url }}{{ fail "ingester: set ingester.sources.<source>.url or enable the bundled mosquitto" }}{{ end }}
+# Live ingester: one MQTT connection (subscribe only) -> Parquet in S3.
+# One replica: two would double every row (each subscribes to the same topic).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ingester
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate} # never two subscribers at once during a rollout
+  selector:
+    matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {{- include "meshtwin.podSecurity" 65532 | nindent 8 }}
+      terminationGracePeriodSeconds: 45 # the ingester's final flush has a 30 s deadline
+      containers:
+        - name: ingester
+          image: {{ .Values.images.ingester }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          env:
+            - {name: MODE, value: live}
+            - {name: MQTT_URL, value: {{ $url | quote }}}
+            - {name: MQTT_TOPIC, value: "meshcore/{{ .Values.region }}/+/packets"}
+            - {name: MQTT_MAX_PER_SEC, value: {{ $src.maxPerSec | quote }}}
+            - {name: FLUSH_AGE, value: {{ .Values.ingester.flushAge | quote }}}
+            {{- $mqttSecret := .Values.ingester.mqtt.existingSecret | default (printf "%s-mqtt" .Release.Name) }}
+            - name: MQTT_USERNAME
+              valueFrom: {secretKeyRef: {name: {{ $mqttSecret }}, key: username}}
+            - name: MQTT_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $mqttSecret }}, key: password}}
+            {{- include "meshtwin.s3Env" . | nindent 12 }}
+          ports:
+            - {name: http, containerPort: 8080}
+          # The HTTP server starts only once S3 answers (the ingester retries for 60 s),
+          # so give startup 2 min before liveness can restart it.
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 24
+          # Liveness = process serving; readiness = broker connected and last flush OK.
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          resources: {{- toYaml .Values.ingester.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ingester
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "meshtwin.selector" $c | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+{{- if $bundled }}
+{{- $m := dict "root" $ "component" "mosquitto" }}
+---
+# Bundled broker for the own-observer setting (as in docker-compose). Password
+# auth only; the password file is built from the MQTT Secret at pod start.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-mosquitto
+  labels: {{- include "meshtwin.labels" $m | nindent 4 }}
+data:
+  mosquitto.conf: |
+    listener 1883
+    allow_anonymous false
+    password_file /pw/pw
+    persistence false
+    log_dest stdout
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-mosquitto
+  labels: {{- include "meshtwin.labels" $m | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "meshtwin.selector" $m | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "meshtwin.labels" $m | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {{- include "meshtwin.podSecurity" 1883 | nindent 8 }}
+      initContainers:
+        - name: passwd
+          image: {{ .Values.images.mosquitto }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          command: [sh, -c, 'umask 077 && mosquitto_passwd -b -c /pw/pw "$MQTT_USERNAME" "$MQTT_PASSWORD"']
+          env:
+            - name: MQTT_USERNAME
+              valueFrom: {secretKeyRef: {name: {{ $mqttSecret }}, key: username}}
+            - name: MQTT_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $mqttSecret }}, key: password}}
+          resources: {{- toYaml .Values.mosquitto.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts: [{name: pw, mountPath: /pw}]
+      containers:
+        - name: mosquitto
+          image: {{ .Values.images.mosquitto }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args: [mosquitto, -c, /mosquitto/config/mosquitto.conf]
+          ports:
+            - {name: mqtt, containerPort: 1883}
+          livenessProbe:
+            tcpSocket: {port: mqtt}
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket: {port: mqtt}
+            periodSeconds: 10
+          resources: {{- toYaml .Values.mosquitto.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: pw, mountPath: /pw, readOnly: true}
+            - {name: config, mountPath: /mosquitto/config, readOnly: true}
+      volumes:
+        - name: pw
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: config
+          configMap: {name: {{ .Release.Name }}-mosquitto}
+---
+# NodePort so an observer on your LAN can publish (k3d maps host port 1883 here).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-mosquitto
+  labels: {{- include "meshtwin.labels" $m | nindent 4 }}
+spec:
+  type: NodePort
+  selector: {{- include "meshtwin.selector" $m | nindent 4 }}
+  ports:
+    - {name: mqtt, port: 1883, targetPort: mqtt, nodePort: 31883}
+{{- end }}
+{{- end }}

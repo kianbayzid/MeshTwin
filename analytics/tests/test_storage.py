@@ -1,4 +1,4 @@
-"""S3/MinIO wiring: only the config builder (no MinIO in unit tests)."""
+"""S3 wiring: only the config builder (no object store in unit tests)."""
 
 from meshtwin_analytics.storage import S3Config, table_glob
 
@@ -8,6 +8,10 @@ def test_from_env_defaults_to_plain_http_minio() -> None:
         {"S3_ENDPOINT": "minio:9000", "S3_ACCESS_KEY": "k", "S3_SECRET_KEY": "s"}
     )
     assert cfg == S3Config("minio:9000", "k", "s", tls=False)
+
+
+def test_from_env_default_endpoint_is_seaweedfs() -> None:
+    assert S3Config.from_env({}).endpoint == "localhost:8333"
 
 
 def test_from_env_tls_and_scheme() -> None:

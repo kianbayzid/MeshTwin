@@ -1,7 +1,8 @@
-"""Write the topology job's results under an output root (directory or s3://bucket)."""
+"""Write the jobs' results under an output root (directory or s3://bucket)."""
 
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 import pyarrow.parquet as pq
 
@@ -32,8 +33,15 @@ def write_all(run: TopologyRun, out_root: str) -> list[str]:
         "topology": summaries.topology_json(run),
         "resilience": summaries.resilience_json(run),
     }
-    d = f"{base}/summaries/region={run.region}"
+    return written + write_summaries(run.region, docs, out_root)
+
+
+def write_summaries(region: str, docs: dict[str, dict[str, Any]], out_root: str) -> list[str]:
+    """Writes summaries/region=<R>/<name>.json for each doc. Returns the paths."""
+    fs, base = output_fs(out_root)
+    d = f"{base}/summaries/region={region}"
     fs.create_dir(d, recursive=True)
+    written = []
     for name, doc in docs.items():
         with fs.open_output_stream(f"{d}/{name}.json") as f:
             f.write(json.dumps(doc, indent=2).encode())

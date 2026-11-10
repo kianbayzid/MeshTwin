@@ -1,0 +1,108 @@
+{{- $c := dict "root" $ "component" "grafana" }}
+# Grafana with everything provisioned from files: the Prometheus datasource and
+# the MeshTwin dashboard. State (sqlite, plugins) is throwaway on an emptyDir.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-provisioning
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://{{ .Release.Name }}-prometheus:9090
+        isDefault: true
+        editable: false
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: meshtwin
+        type: file
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana-dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-dashboards
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+data:
+  {{- if .Values.grafana.dashboard }}
+  meshtwin.json: {{ .Values.grafana.dashboard | toJson }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+      annotations:
+        checksum/dashboard: {{ .Values.grafana.dashboard | sha256sum | trunc 16 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {{- include "meshtwin.podSecurity" 472 | nindent 8 }}
+      containers:
+        - name: grafana
+          image: {{ .Values.images.grafana }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Release.Name }}-grafana, key: admin-password}}
+            # No phoning home, no sign-up, logs to stdout only (root fs is read-only).
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+            - {name: GF_LOG_MODE, value: console}
+            - {name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH, value: /var/lib/grafana-dashboards/meshtwin.json}
+          ports:
+            - {name: http, containerPort: 3000}
+          livenessProbe:
+            httpGet: {path: /api/health, port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 10
+          resources: {{- toYaml .Values.grafana.resources | nindent 12 }}
+          securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/grafana}
+            - {name: tmp, mountPath: /tmp}
+            - {name: provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yaml, subPath: datasources.yaml, readOnly: true}
+            - {name: provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml, readOnly: true}
+            - {name: dashboards, mountPath: /var/lib/grafana-dashboards, readOnly: true}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 512Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: provisioning
+          configMap: {name: {{ .Release.Name }}-grafana-provisioning}
+        - name: dashboards
+          configMap: {name: {{ .Release.Name }}-grafana-dashboards}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+spec:
+  type: NodePort
+  selector: {{- include "meshtwin.selector" $c | nindent 4 }}
+  ports:
+    - {name: http, port: 3000, targetPort: http, nodePort: {{ .Values.grafana.nodePort }}}

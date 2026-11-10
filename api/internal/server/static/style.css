@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; font: 14px/1.4 system-ui, sans-serif; color: #1b1b1b; background: #fff; }
+header { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+header h1 { font-size: 16px; margin: 0; }
+header label { display: flex; align-items: center; gap: 6px; }
+#status { margin: 0; color: #8a4b00; flex-basis: 100%; min-height: 1.4em; }
+#map { flex: 1; min-height: 300px; }
+footer { padding: 4px 12px; font-size: 12px; color: #555; border-top: 1px solid #ddd; }
+footer p { margin: 4px 0; }
+#legend { position: absolute; right: 10px; bottom: 60px; z-index: 1000; background: #fff; padding: 6px 8px;
+  border: 1px solid #bbb; border-radius: 4px; font-size: 12px; }
+#legend span { display: inline-block; width: 18px; height: 4px; margin-right: 6px; vertical-align: middle; }
+.rank-label { font-weight: bold; }
+@media (max-width: 600px) {
+  header { padding: 6px 8px; }
+  /* One control per line, the slider taking what is left: no horizontal overflow at 390 px. */
+  header label { flex: 1 1 100%; min-width: 0; }
+  header input[type=range] { flex: 1; min-width: 0; width: auto; }
+}

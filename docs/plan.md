@@ -2,7 +2,7 @@
 
 ## Phases (stop after each)
 1. Protocol research → `docs/protocol.md`, Parquet schema, synthetic + replay generators
-2. Go ingester (decode → Parquet → MinIO) in docker-compose, tests on recorded packets
+2. Go ingester (decode → Parquet → S3) in docker-compose, tests on recorded packets
 3. Python topology graph + resilience analysis
 4. Terrain propagation model + predicted-vs-observed report
 5. Placement recommender + Go API + map page
@@ -12,7 +12,7 @@
 
 ## Decisions (2026-11-04)
 - Region: **Seattle (SEA)**. Synthetic network and Phase 4 DEM tile cover the Seattle area.
-- Coordinates: **stored raw** in private MinIO and **snapped to ~1 km at every output** (API, JSON, map). A test enforces it.
+- Coordinates: **stored raw** in private S3 storage and **snapped to ~1 km at every output** (API, JSON, map). A test enforces it.
 - Test capture: **record from a public source, then anonymize** (remap pubkeys, shift coordinates consistently) before it enters the repo.
 - Generator + replay: **Go**, in the ingest module. They double as the ingester's synthetic and replay modes.
 
@@ -65,3 +65,26 @@
 - protocol-researcher: relay roles, advert cadence (47 h), hash-width default. Recorded in protocol.md §2.
 - analytics-engineer: `analytics/` (topology, hop resolution, resilience, evaluation, contract JSON).
 - Follow-ups: synthetic advert cadence is unrealistic (go lane); EM-lite prior refinement for collisions like `60` (analytics).
+
+## Phase 4: done (2026-11-08), pending the user's review
+- protocol-researcher: US preset (910.525 MHz / 62.5 kHz / SF7 / CR5), TX 22 dBm, SX1262 floors, P.526-16 equations, Copernicus licence + attribution, 3DEP fallback.
+- analytics-engineer: `terrain.py` (GLO-30 reader via tifffile + imagecodecs, `fetch-dem`), `propagation.py` (FSPL + single knife-edge behind `PropagationModel`), `compare.py` (`residuals.json`, `surprising.json`).
+- Follow-ups: SNR saturation near +14 dB inflates residuals on strong links; "never seen" list hits its cap (margin to tune on real data); Deygout or P.526 §4.5 Bullington for multiple ridges; generator CR5 comment (go lane).
+
+## Phase 5: done (2026-11-09), pending the user's review
+- analytics-engineer: `placement.py` + `placement` CLI (0.01° candidate cells, new links via the `PropagationModel`, relay-aware gain, SPOFs removed for the top 50). Contract gained `method.dem`, `method.spofs_checked_top`.
+- go-engineer: `api/` module (contract endpoints, ETag/304, local + S3 stores, 8 MB cap, metrics, CSP) and the embedded Leaflet map.
+- **Validation before serving:** every summary is decoded, checked against an allow-list of the contract's key paths and types,
+  privacy rules applied (0.01° cells in range, 2–8 hex ids, names only for repeater/room, RFC 3339 times), then re-encoded;
+  the raw file is never served. Took four verifier rounds; each round's bypasses are now test cases.
+- Design limit: free-text fields (repeater names, reasons) are not policed; snapping in analytics is the primary control.
+- Follow-ups: model calibration from residuals (placement ranking saturates); Dockerfile for the API (Phase 6, platform lane); S3 store untested against MinIO.
+
+## Phase 6: done (2026-11-09), pending the user's review
+- Decision (user): **SeaweedFS (official `chrislusf/seaweedfs`) replaces MinIO** as the S3 store, in compose and k3d. pgsty/minio was never approved.
+- Tooling: k3d 5.9.0 and Helm 4.3.1 installed with winget (user approved).
+- go-engineer: summary freshness gauge in the API. platform-engineer: Dockerfiles (digest-pinned), compose, k3d, Helm chart, CronJobs, Prometheus/Grafana.
+- platform-engineer: `api/` + `analytics/` Dockerfiles, every base image pinned by digest; compose on SeaweedFS + an `api` service; `deploy/k3d/cluster.yaml`; Makefile (`cluster images deploy smoke lint clean`); chart `deploy/helm/meshtwin` (SeaweedFS, ingester, API x2, 3 CronJobs, Prometheus, Grafana); `dashboards/meshtwin.json` + `alerts.yml`.
+- Verifier rounds: platform FAIL once (compose mosquitto not digest-pinned; no empty-secret guard on SeaweedFS in the chart), analytics FAIL once (Windows rename race in `fetch_glo30`, caught by its own new test). Both fixed; hardening added: SeaweedFS NetworkPolicy, kube API on 127.0.0.1.
+- API readiness probe hits `/api/v1/regions`, which keeps the freshness gauge current without user traffic.
+- Follow-ups: ingester starts its HTTP server only after S3 answers (startupProbe + one cold-start restart; go lane); Prometheus on emptyDir; our images have tags, not digests, until there's a registry (Phase 8); OSM tiles for a public deploy.
