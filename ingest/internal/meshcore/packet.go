@@ -123,14 +123,14 @@ func (p Packet) TraceSNRs() []float32 {
 	}
 	snrs := make([]float32, len(p.Path))
 	for i, b := range p.Path {
-		snrs[i] = float32(int8(b)) / 4
+		snrs[i] = float32(int8(b)) / 4 //nolint:gosec // G115: firmware stores SNR*4 as a signed byte
 	}
 	return snrs
 }
 
 // pathLenByte packs hash size and count like Packet::setPathHashSizeAndCount.
 func (p Packet) pathLenByte() byte {
-	return byte((p.PathHashSize-1)<<6 | p.HopCount()&63)
+	return byte((p.PathHashSize-1)<<6 | p.HopCount()&63) //nolint:gosec // G115: hash size 1-3 (2 bits) and count masked to 6 bits fill exactly one byte
 }
 
 // Decode parses wire bytes, following Packet::readFrom:

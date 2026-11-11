@@ -144,7 +144,7 @@ func convertFile(t *testing.T, path string) (rows, adverts, mismatches, skipped 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
@@ -244,7 +244,9 @@ func typeName(n parquet.Node) string {
 		case s == "STRING":
 			return "string"
 		case strings.HasPrefix(s, "INT("):
-			fmt.Sscanf(s, "INT(%d", &bits)
+			if _, err := fmt.Sscanf(s, "INT(%d", &bits); err != nil {
+				return "unparsed " + s
+			}
 			return fmt.Sprintf("int%d", bits)
 		case strings.HasPrefix(s, "TIMESTAMP(isAdjustedToUTC=true"):
 			return map[bool]string{true: "timestamp[us, UTC]", false: "timestamp[ms, UTC]"}[strings.Contains(s, "MICROS")]

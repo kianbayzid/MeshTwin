@@ -26,7 +26,7 @@ Before reading a community's feed, check that the broker's terms allow third-par
 ### Politeness policy (enforced in `ingest/internal/source/mqtt.go`)
 - **Subscribe only.** Never publish to a broker we don't own.
 - One connection per broker, subscribed to a region-filtered topic (`meshcore/SEA/+/packets`), never `#`.
-- QoS 0 (no broker-side queueing on our behalf).
+- QoS 0 on public brokers (no broker-side queueing on our behalf); QoS 1 only on your own broker (see below).
 - Reconnect with exponential backoff (paho: 1 s doubling to a 5 min cap; retry every 5 s on first connect).
 - Client id `meshtwin-<random>`, so operators can identify us. Credentials come from a Kubernetes Secret.
 - Per-source message-rate cap (`MQTT_MAX_PER_SEC`) and a 16 KB message-size cap. Dropped messages are counted in `meshtwin_ingest_messages_total{result="rate_limited"|"oversize"}`.
@@ -76,9 +76,29 @@ The map also shows the Copernicus attribution (Terrain section), because residua
 | k3s (k3d node) | `rancher/k3s:v1.35.5-k3s1@sha256:2074403abe1bded11ef3dde09d457e13be8e0b64c218b1c4f8269b4565cfbc65` (official) | local cluster only |
 | Chaos test image | `meshtwin/chaos:test`: built from the pinned `golang` base + our analytics image; nothing new pulled | **Test only** (`make chaos`): bundles `mqttreplay` and the synthetic `sea-seed1-10m.ndjson`. Never in default values. |
 
-Our own images (`meshtwin/*:0.6.0`) are imported straight into k3d; there is no registry yet, so they have tags, not digests.
+Our own images (`meshtwin/*:0.7.0`) are imported straight into k3d, and CI builds them fresh each run; there is no registry, so they have tags, not digests.
+
+### CI (Phase 8, `.github/workflows/ci.yml`)
+
+Actions are pinned by commit SHA (a tag can be moved; a SHA can't). Tool images by digest; downloaded binaries checked against a SHA-256 written in the workflow.
+
+| component | version | pin |
+|---|---|---|
+| actions/checkout | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| actions/setup-go | v7.0.0 | `b7ad1dad31e06c5925ef5d2fc7ad053ef454303e` |
+| astral-sh/setup-uv | v10.3.3 | `68559e99cc807c1eb7e9238fd43a15bba460eec2` |
+| actions/upload-artifact | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
+| golangci/golangci-lint | v2.15.0 | `sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481` |
+| aquasec/trivy | 0.76.2 | `sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb` (vulnerability DB from `mirror.gcr.io`) |
+| anchore/syft | v1.57.1 | `sha256:03215d0e98b661d0ecbc8575dbc14d65be1743b5de5df6410aecb7e80f95b060` |
+| rhysd/actionlint (local check) | 1.7.12 | `sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667` |
+| helm linux-amd64 | v4.3.1 | sha256 `0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b` |
+| k3d-linux-amd64 | v5.9.0 | sha256 `06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0` |
+| kubectl linux/amd64 | v1.35.5 (matches k3s) | sha256 `90f75ea6ecc9ea5633262e1c0b83a40560003b30fc94a04cb099404fcef0c224` |
+| govulncheck | v1.9.0 | `go run …@v1.9.0`, verified by the Go checksum database |
+| uv / Python | 0.13.1 / 3.12.16 | via setup-uv |
 
 ## Broker politeness under QoS 1 (Phase 7)
 
-- **own-observer** (your broker): QoS 1 + persistent session, so the broker queues messages while the ingester restarts. `MQTT_MAX_PER_SEC` is 500 there: it's our own broker, and the backlog after a restart arrives in a burst.
+- **own-observer** (your broker): QoS 1 + persistent session, so the broker queues messages while the ingester restarts. `MQTT_MAX_PER_SEC` is 50 there; under QoS 1 the cap throttles (no ack until processed) instead of dropping, so a backlog after a restart is delayed, not lost.
 - **public-broker**: stays QoS 0 with a clean session. A persistent session would make a community broker hold a queue for us, which isn't ours to ask for.

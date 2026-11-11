@@ -33,7 +33,7 @@ func (s *S3) Get(ctx context.Context, region, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get summary: %w", err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }() // read-only: a close error cannot lose data
 	b, err := readCapped(obj)
 	if minio.ToErrorResponse(err).Code == minio.NoSuchKey {
 		return nil, ErrNotFound

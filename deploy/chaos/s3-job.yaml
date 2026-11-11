@@ -54,7 +54,7 @@ spec:
               unexpected = q("SELECT count(DISTINCT reception_id) FROM a ANTI JOIN e USING (reception_id)")
               print(f"expected={expected} actual={actual} missing={missing} "
                     f"unexpected={unexpected} rows={rows} duplicates={rows - actual}")
-              ok = actual == expected and missing == 0
+              ok = expected > 0 and actual == expected and missing == 0  # an empty expected set proves nothing
               print("ZERO-LOSS PASS" if ok else "ZERO-LOSS FAIL")
               sys.exit(0 if ok else 1)
           env:

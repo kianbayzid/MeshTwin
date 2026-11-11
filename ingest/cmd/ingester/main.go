@@ -114,7 +114,7 @@ func parseConfig() config {
 	flag.Parse()
 	c.MQTT.Password = os.Getenv("MQTT_PASSWORD")
 	c.S3SecretKey = os.Getenv("S3_SECRET_KEY")
-	c.MQTT.QoS = byte(c.MQTTQoS)
+	c.MQTT.QoS = byte(c.MQTTQoS) //nolint:gosec // G115: validate() rejects anything but 0 or 1 before the value is used
 	return c
 }
 
@@ -159,7 +159,7 @@ func run(c config) error {
 			return err
 		}
 		store = spool
-		slog.Info("spooling to disk while object storage is down", "dir", c.SpoolDir, "max_bytes", c.SpoolMaxBytes, "drain_rate_bytes", c.DrainRateBytes)
+		slog.Info("spool enabled: files object storage does not accept are buffered on disk", "dir", c.SpoolDir, "max_bytes", c.SpoolMaxBytes, "drain_rate_bytes", c.DrainRateBytes)
 		go spool.Drain(ctx)
 	}
 	w := &ingest.Writer{Store: store, FlushRows: c.FlushRows, FlushAge: c.FlushAge, Now: time.Now}
@@ -175,7 +175,7 @@ func run(c config) error {
 			slog.Error("http server", "err", err)
 		}
 	}()
-	defer srv.Close()
+	defer func() { _ = srv.Close() }() // shutdown path: nothing left to report the error to
 
 	var rec *json.Encoder
 	if c.RecordFile != "" {
@@ -330,7 +330,7 @@ func pickSource(c config) (sourceFunc, error) {
 			if err != nil {
 				return err
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
 			st, err := replay.Play(ctx, f, c.Speed, emit)
 			slog.Info("replay finished", "records", st.Records, "skipped_lines", st.Skipped)
 			return err
@@ -339,7 +339,7 @@ func pickSource(c config) (sourceFunc, error) {
 		return func(ctx context.Context, emit func(replay.Record) error, _ *atomic.Bool) error {
 			cfg := synth.DefaultConfig()
 			cfg.Seed = c.SynthSeed
-			rng := rand.New(rand.NewPCG(cfg.Seed, cfg.Seed))
+			rng := rand.New(rand.NewPCG(cfg.Seed, cfg.Seed)) //nolint:gosec // G404: synthetic data must be reproducible from a seed, not secret
 			net, err := synth.NewNetwork(cfg, rng)
 			if err != nil {
 				return err

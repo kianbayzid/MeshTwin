@@ -45,11 +45,11 @@ func run(file, url string, speed float64, qos int) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	f, err := os.Open(file)
+	f, err := os.Open(file) //nolint:gosec // G304: the operator names the capture file on the command line
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
 
 	client := mqtt.NewClient(mqtt.NewClientOptions().
 		AddBroker(url).
@@ -67,7 +67,7 @@ func run(file, url string, speed float64, qos int) error {
 	defer client.Disconnect(1000)
 
 	st, err := replay.Play(ctx, f, speed, func(r replay.Record) error {
-		t := client.Publish(r.Topic, byte(qos), false, []byte(r.Payload))
+		t := client.Publish(r.Topic, byte(qos), false, []byte(r.Payload)) //nolint:gosec // G115: qos is checked to be 0 or 1 above
 		if !t.WaitTimeout(30 * time.Second) {
 			return fmt.Errorf("publish %s: timeout", r.Topic)
 		}

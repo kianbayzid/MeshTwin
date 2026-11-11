@@ -10,6 +10,3 @@ ingester:
   source: own-observer
 smoke:
   seedFixtures: true
-# Smaller cache and store for a laptop cluster.
-seaweedfs:
-  storage: 2Gi

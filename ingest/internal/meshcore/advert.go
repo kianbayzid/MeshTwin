@@ -78,8 +78,8 @@ func ParseAdvert(payload []byte) (Advert, error) {
 			return a, ErrBadAdvert
 		}
 		a.HasLocation = true
-		a.LatE6 = int32(binary.LittleEndian.Uint32(app[i:]))
-		a.LonE6 = int32(binary.LittleEndian.Uint32(app[i+4:]))
+		a.LatE6 = int32(binary.LittleEndian.Uint32(app[i:]))   //nolint:gosec // G115: wire format is two's-complement int32; reinterpreting the bits is the decode
+		a.LonE6 = int32(binary.LittleEndian.Uint32(app[i+4:])) //nolint:gosec // G115: as above
 		i += 8
 	}
 	if flags&advFeat1 != 0 {
@@ -109,8 +109,8 @@ func AdvertPayload(a Advert) []byte {
 	app := []byte{a.Role & 0x0F}
 	if a.HasLocation {
 		app[0] |= advLatLon
-		app = binary.LittleEndian.AppendUint32(app, uint32(a.LatE6))
-		app = binary.LittleEndian.AppendUint32(app, uint32(a.LonE6))
+		app = binary.LittleEndian.AppendUint32(app, uint32(a.LatE6)) //nolint:gosec // G115: two's-complement int32 on the wire, the inverse of ParseAdvert
+		app = binary.LittleEndian.AppendUint32(app, uint32(a.LonE6)) //nolint:gosec // G115: as above
 	}
 	if a.Feat1 != 0 {
 		app[0] |= advFeat1

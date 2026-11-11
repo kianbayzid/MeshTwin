@@ -11,7 +11,6 @@ package anonymize
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,8 +43,9 @@ type Anonymizer struct {
 // New derives all mappings from key (use 32 random bytes).
 func New(key []byte) *Anonymizer {
 	a := &Anonymizer{key: key}
-	seed := a.prf("perm", nil, 16)
-	rng := rand.New(rand.NewPCG(binary.LittleEndian.Uint64(seed), binary.LittleEndian.Uint64(seed[8:])))
+	// ChaCha8, not PCG: PCG's state can be recovered from its outputs, and anyone
+	// who knows some real public keys sees part of this permutation.
+	rng := rand.New(rand.NewChaCha8([32]byte(a.prf("perm", nil, 32)))) //nolint:gosec // G404: ChaCha8 is a CSPRNG; it must be seeded (deterministic per key), which crypto/rand cannot be
 	for i := range a.perm {
 		for j := range a.perm[i] {
 			a.perm[i][j] = byte(j)

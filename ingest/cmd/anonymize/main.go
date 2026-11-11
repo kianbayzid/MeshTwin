@@ -37,16 +37,16 @@ func run(inPath, outPath string) error {
 	}
 	a := anonymize.New(key)
 
-	f, err := os.Open(inPath)
+	f, err := os.Open(inPath) //nolint:gosec // G304: the operator names the file on the command line; that is the tool's job
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	o, err := os.Create(outPath)
+	defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
+	o, err := os.Create(outPath)     //nolint:gosec // G304: as above
 	if err != nil {
 		return err
 	}
-	defer o.Close()
+	defer func() { _ = o.Close() }() // covers early returns; the success path checks Close below
 	bw := bufio.NewWriter(o)
 	enc := json.NewEncoder(bw)
 

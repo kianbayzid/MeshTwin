@@ -160,3 +160,35 @@ Real drains are bounded by the network or `DRAIN_RATE_BYTES`, not the disk.
 - Script runtime 22 m 39 s (~11 m of scenarios, the rest waiting for the publisher to finish).
 - Read-side dedup by `reception_id` (at-least-once delivery): topology command 1.523 s → 1.562 s (+2.6 %) on `sea-seed1-2h-hash1`.
 - Not exercised: SIGKILL (rows in memory are lost), QoS 0 public broker (messages lost while the ingester is down), mosquitto restart (queue persistence configured, untested).
+
+## Phase 8: CI + security scanning (2026-11-10)
+
+The workflow has not run on GitHub yet (no remote). These are its steps run locally in the same pinned Linux containers
+(Docker Desktop / WSL2, warm module caches).
+
+| job / step | time |
+|---|---:|
+| go (ingest): gofmt 1 s · vet 27 s · test -race 32 s · golangci-lint 30 s · govulncheck 12 s | ~1.7 min |
+| go (api): vet 1 s · test -race 4 s · golangci-lint 4 s · govulncheck 6 s | ~15 s |
+| python: uv sync --locked 20 s · ruff 0 s · mypy 5 s · pytest 40 s (89 tests) | ~1.1 min |
+| helm: checksum-verified install + `make lint` 14 s · Trivy config scan of the rendered chart 5 s | ~20 s |
+| images, cold build: ingester 32 s · api 18 s · analytics 38 s | |
+| Trivy: DB download 18 s (133 MB) · scan 1 s per Go image, 8 s analytics | |
+| Syft SBOM: 2 s / 3 s / 11 s | |
+| `make smoke` on a running cluster (deploy + seed + 3 jobs + 31 s cache wait) | 184 s |
+
+Vulnerability scan (Trivy 0.76.2; the gate fails on HIGH/CRITICAL **with a fix available**):
+
+| image | before Phase 8 | after | gate |
+|---|---|---|---|
+| ingester (29 MB) | HIGH 1 (`x/net`), MEDIUM 1, UNKNOWN 5 | UNKNOWN 5 | pass |
+| api (22 MB) | HIGH 1 (`x/net`), MEDIUM 1, UNKNOWN 5 | UNKNOWN 5 | pass |
+| analytics (792 MB) | CRITICAL 2, HIGH 96 (none fixable), + pip: 5 MEDIUM, 1 LOW | OS findings unchanged, pip removed: 0 Python findings | pass |
+
+- govulncheck (call-graph aware): ingest had **2 reachable** vulnerabilities (brotli, klauspost/compress via the Parquet
+  writer); now 0 in both modules. Trivy matches versions only, so it also caught `x/net`, which govulncheck showed unreachable.
+  The two tools disagree by design; both gates are kept.
+- golangci-lint v2 found 56 issues in ingest and 13 in api; 0 after fixes. 27 `//nolint` remain, each naming one rule with a reason.
+- SBOMs (SPDX 2.3): ingester 43 packages, api 33, analytics 120.
+- The remaining UNKNOWNs are distroless ca-certificates/tzdata advisories (base digest is already the newest) and an x/crypto
+  advisory fixed only in an untagged pre-release (not reachable).

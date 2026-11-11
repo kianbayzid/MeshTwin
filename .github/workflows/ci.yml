@@ -1,0 +1,189 @@
+# MeshTwin CI: lint + test each lane, scan the images, then an end-to-end k3d
+# smoke test on TEST DATA. Every step is reproduced locally in docs/benchmarks.md.
+#
+# Supply chain: third-party actions are pinned by full commit SHA (a tag can be
+# moved; a commit can't), tool images by digest, downloaded binaries by SHA-256.
+# Versions are in the comments and in docs/data-sources.md.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the token can only read the repo. No job needs more.
+permissions:
+  contents: read
+
+# A new push to a PR cancels its older run; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.27.3" # = golang image in the Dockerfiles: test with the compiler that builds the binary
+  GOLANGCI_LINT_IMAGE: golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
+  GOVULNCHECK: golang.org/x/vuln/cmd/govulncheck@v1.9.0
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+  SYFT_IMAGE: anchore/syft:v1.57.1@sha256:03215d0e98b661d0ecbc8575dbc14d65be1743b5de5df6410aecb7e80f95b060
+  HELM_VERSION: v4.3.1
+  HELM_SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b # helm-v4.3.1-linux-amd64.tar.gz
+  K3D_VERSION: v5.9.0
+  K3D_SHA256: 06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0 # k3d-linux-amd64
+  KUBECTL_VERSION: v1.35.5 # = k3s in deploy/k3d/cluster.yaml
+  KUBECTL_SHA256: 90f75ea6ecc9ea5633262e1c0b83a40560003b30fc94a04cb099404fcef0c224 # linux/amd64/kubectl
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [ingest, api]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          [ -z "$unformatted" ] || { echo "not gofmt-ed:"; echo "$unformatted"; exit 1; }
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: golangci-lint
+        run: docker run --rm -v "$PWD:/src" -w /src "$GOLANGCI_LINT_IMAGE" golangci-lint run
+      # Reports only vulnerabilities our code can actually reach (call graph).
+      - run: go run "$GOVULNCHECK" ./...
+
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: analytics
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.1"
+          python-version: "3.12.16" # = python image in analytics/Dockerfile
+          enable-cache: true
+          cache-dependency-glob: analytics/uv.lock
+      - run: uv sync --locked # fails if uv.lock is out of date with pyproject.toml
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run python -m pytest
+
+  helm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install helm
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/helm.tgz" "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
+          echo "$HELM_SHA256  $RUNNER_TEMP/helm.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/helm.tgz" -C "$RUNNER_TEMP" linux-amd64/helm
+          echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
+      - run: make lint
+      # Every profile, so env_files and anchors are checked too. Needs no .env:
+      # unset secrets default to empty, and seaweedfs refuses to start without one.
+      - run: docker compose -f deploy/compose/docker-compose.yml --profile own-observer --profile public-broker --profile replay config --quiet
+      # Misconfiguration scan: the chart as rendered for both value sets (what
+      # actually gets deployed), plus every Dockerfile and manifest in the repo.
+      - name: trivy config
+        run: |
+          mkdir rendered
+          files=(--set-file grafana.dashboard=dashboards/meshtwin.json --set-file prometheus.rules=dashboards/alerts.yml)
+          helm template meshtwin deploy/helm/meshtwin "${files[@]}" > rendered/default.yaml
+          helm template meshtwin deploy/helm/meshtwin "${files[@]}" -f deploy/helm/meshtwin/values-smoke.yaml > rendered/smoke.yaml
+          docker run --rm -v "$PWD:/src:ro" "$TRIVY_IMAGE" config \
+            --severity HIGH,CRITICAL --exit-code 1 /src
+
+  images:
+    needs: [go, python]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: ingester, dir: ingest}
+          - {name: api, dir: api}
+          - {name: analytics, dir: analytics}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Built per run and never pushed (no registry), so tagged, not digest-pinned.
+      - run: docker build -t "meshtwin/${{ matrix.name }}:ci" "${{ matrix.dir }}"
+      # Fail only on HIGH/CRITICAL that have a fixed version: those we can act on
+      # by bumping a base image or dependency. Unfixed ones would block every
+      # build with nothing to do; the table still lists what is scanned.
+      - name: trivy image
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --no-progress --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "meshtwin/${{ matrix.name }}:ci"
+      # SBOM: the exact package list of the shipped image, so a CVE published
+      # later can be checked against it without rebuilding.
+      - name: syft sbom
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$RUNNER_TEMP/sbom:/out" "$SYFT_IMAGE" \
+            "docker:meshtwin/${{ matrix.name }}:ci" -q -o "spdx-json=/out/${{ matrix.name }}.spdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: sbom-${{ matrix.name }}
+          path: ${{ runner.temp }}/sbom/${{ matrix.name }}.spdx.json
+          if-no-files-found: error
+
+  # On PRs too: this is the only end-to-end check, and it has to block a bad
+  # merge, not report one afterwards. Concurrency cancels superseded PR runs.
+  smoke:
+    needs: [images, helm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install helm, k3d and kubectl
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/helm.tgz" "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
+          echo "$HELM_SHA256  $RUNNER_TEMP/helm.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/helm.tgz" -C "$RUNNER_TEMP" linux-amd64/helm
+          curl -fsSLo "$RUNNER_TEMP/linux-amd64/k3d" "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/k3d-linux-amd64"
+          echo "$K3D_SHA256  $RUNNER_TEMP/linux-amd64/k3d" | sha256sum -c -
+          curl -fsSLo "$RUNNER_TEMP/linux-amd64/kubectl" "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+          echo "$KUBECTL_SHA256  $RUNNER_TEMP/linux-amd64/kubectl" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/linux-amd64/k3d" "$RUNNER_TEMP/linux-amd64/kubectl"
+          echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
+      # Same targets as on a laptop. Images are rebuilt here (layer cache is
+      # per job) rather than passed as artifacts: simpler, about a minute.
+      - run: make cluster images smoke
+      - name: dump cluster state
+        if: failure()
+        run: |
+          k() { kubectl --context k3d-meshtwin -n meshtwin "$@"; }
+          k get pods,jobs,pvc -o wide || true
+          k get events --sort-by=.lastTimestamp | tail -50 || true
+          for p in $(k get pods -o name); do
+            echo "=== $p"
+            k logs "$p" --all-containers --tail=100 || true
+          done

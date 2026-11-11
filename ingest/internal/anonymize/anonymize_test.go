@@ -24,7 +24,7 @@ func load(t *testing.T) []replay.Record {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var recs []replay.Record
 	sc := bufio.NewScanner(f)
 	sc.Buffer(nil, 1<<20)

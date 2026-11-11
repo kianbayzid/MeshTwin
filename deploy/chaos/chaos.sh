@@ -7,7 +7,7 @@
 #   b. flapping link    SeaweedFS down/up FLAPS times, FLAP s each: spool rises and falls
 #   c. ingester killed  graceful pod delete while S3 is down: the new pod finds the spool
 #                       on the PVC; mosquitto queues the QoS 1 messages meanwhile
-#   d. limited link     DRAIN_RATE_BYTES=DRAIN_CAP: drain time ~ spooled bytes / cap
+#   d. limited link     DRAIN_RATE_BYTES=DRAIN_CAP: drain time ~ spooled bytes / cap (drain_check.sh)
 # then the zero-loss check: distinct reception_id in s3://meshtwin/receptions/ must
 # equal the distinct reception_id of the same file through `ingester -mode replay
 # -local-dir` (computed when the chaos image is built). Exits non-zero otherwise.
@@ -205,13 +205,27 @@ sleep 90
 status "d. before restore"
 alerts "d. during outage"
 bytes=$(metric meshtwin_ingest_spool_bytes)
+files=$(metric meshtwin_ingest_spool_files)
+up0=$(metric meshtwin_ingest_spool_uploads_total)
+[ "$up0" != n/a ] || fail "d: no uploads_total metric before restore"
 s3_up
+# The clock starts at the first drained file, not at the restore: the S3 restart
+# and the drainer's backoff (up to 30 s) are not drain time. 1 s polls here.
+t=0
+until metric meshtwin_ingest_spool_uploads_total | awk -v u0="$up0" '{ exit !($1 != "n/a" && $1 > u0) }'; do
+	[ "$t" -ge 300 ] && fail "d: no spool upload within 300s of the restore"
+	sleep 1
+	t=$((t + 1))
+done
 start=$(date +%s)
-drained "d."
+until [ "$(metric meshtwin_ingest_spool_files)" = 0 ]; do
+	[ $(($(date +%s) - start)) -ge 900 ] && fail "d: spool did not drain within 900s"
+	sleep 1
+done
 took=$(($(date +%s) - start))
-want=$(awk -v b="$bytes" -v r="$DRAIN_CAP" 'BEGIN { printf "%d", b / r }')
-log "d. drained $bytes B at cap $DRAIN_CAP B/s: expected ~${want}s, measured ${took}s (includes S3 restart detection)"
-[ "$took" -ge $((want / 2)) ] || fail "d: drained in ${took}s, under half of ${want}s: the cap is not applied"
+msg=$(sh "$HERE/drain_check.sh" "$bytes" "$files" "$DRAIN_CAP" "$took") || fail "$msg"
+log "$msg"
+drained "d."
 $K set env deploy/$REL-ingester DRAIN_RATE_BYTES="$ORIG_DRAIN" >/dev/null
 ORIG_DRAIN=""
 $K rollout status deploy/$REL-ingester --timeout=180s >/dev/null

@@ -128,7 +128,7 @@ func NewNetwork(cfg Config, rng *rand.Rand) (*Network, error) {
 	add := func(role uint8, name string, p pt, gain float64, share bool) {
 		var node Node
 		for i := range node.PubKey {
-			node.PubKey[i] = byte(rng.Uint32())
+			node.PubKey[i] = byte(rng.Uint32()) //nolint:gosec // G115: deliberate truncation to a random low byte
 		}
 		node.Role, node.Name, node.Lat, node.Lon, node.GainDB, node.ShareLocation = role, name, p.lat, p.lon, gain, share
 		n.Nodes = append(n.Nodes, node)

@@ -5,5 +5,7 @@
 ARG ANALYTICS_IMAGE=meshtwin/analytics:0.7.0
 FROM ${ANALYTICS_IMAGE}
 LABEL org.opencontainers.image.description="MeshTwin smoke-test fixtures: SYNTHETIC test data"
+# Same user as the analytics base; explicit so Trivy (DS-0002) sees it through the ARG base.
+USER 10001:10001
 COPY sea-seed1-2h-hash1/receptions /fixtures/receptions
 COPY sea-seed1-2h-hash1/adverts /fixtures/adverts

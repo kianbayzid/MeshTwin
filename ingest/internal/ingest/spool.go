@@ -126,8 +126,9 @@ func OpenSpool(upstream Store, dir string, maxBytes, rateBytes int64) (*Spool, e
 	if err != nil {
 		return nil, fmt.Errorf("spool: directory not writable: %w", err)
 	}
-	probe.Close()
-	os.Remove(probe.Name())
+	// Best-effort cleanup of the probe; a leftover is removed as a partial file at next start.
+	_ = probe.Close()
+	_ = os.Remove(probe.Name())
 	if len(old) > 0 {
 		slog.Info("spool: resuming files from a previous run", "files", len(old), "bytes", s.bytes)
 	}

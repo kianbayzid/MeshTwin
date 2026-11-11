@@ -44,7 +44,7 @@ func (n *Network) Generate(cfg Config, tr Traffic, rng *rand.Rand, emit func(rep
 	}
 	g := &generator{net: n, cfg: cfg, rng: rng}
 	for range 3 {
-		g.channels = append(g.channels, byte(rng.Uint32()))
+		g.channels = append(g.channels, byte(rng.Uint32())) //nolint:gosec // G115: deliberate truncation to a random low byte
 	}
 	var companions []int
 	for i, nd := range n.Nodes {
@@ -132,6 +132,7 @@ func (g *generator) originate(t time.Time, companions []int) {
 
 func (g *generator) advert(origin int, t time.Time) {
 	nd := g.net.Nodes[origin]
+	//nolint:gosec // G115: MeshCore timestamps are uint32 Unix seconds (good until 2106)
 	a := meshcore.Advert{
 		PubKey: nd.PubKey, Timestamp: uint32(t.Unix()), Role: nd.Role, Name: nd.Name,
 		HasLocation: nd.ShareLocation,
@@ -147,7 +148,7 @@ func (g *generator) cipher() []byte { return g.randBytes(2 + 16*(1+g.rng.IntN(4)
 func (g *generator) randBytes(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = byte(g.rng.Uint32())
+		b[i] = byte(g.rng.Uint32()) //nolint:gosec // G115: deliberate truncation to a random low byte
 	}
 	return b
 }

@@ -22,6 +22,8 @@ RUN /out/ingester -mode replay -replay-file /chaos/sea-seed1-10m.ndjson \
 
 FROM ${ANALYTICS_IMAGE}
 LABEL org.opencontainers.image.description="MeshTwin chaos demo: SYNTHETIC test data"
+# Same user as the analytics base; explicit so Trivy (DS-0002) sees it through the ARG base.
+USER 10001:10001
 COPY --from=build /out/mqttreplay /usr/local/bin/mqttreplay
 COPY --from=build /chaos/sea-seed1-10m.ndjson /chaos/
 COPY --from=build /chaos/expected/receptions /chaos/expected/receptions

@@ -84,7 +84,7 @@ func Convert(rec replay.Record) (Result, error) {
 	}
 	var msg observer.Message
 	if err := json.Unmarshal(rec.Payload, &msg); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrBadJSON, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrBadJSON, err)
 	}
 	if msg.Type != "PACKET" || msg.Direction != "rx" {
 		return Result{}, ErrNotPacket
@@ -95,9 +95,10 @@ func Convert(rec replay.Record) (Result, error) {
 	}
 	p, err := meshcore.Decode(raw)
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrDecode, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrDecode, err)
 	}
 
+	//nolint:gosec // G115: the decoder bounds every narrowed field (route 2 bits, type 4, version 2, hash size 1-3, hops 0-63, payload <= 184 bytes).
 	r := Reception{
 		SchemaVersion:  SchemaVersion,
 		ReceptionID:    receptionID(observerID, msg.Timestamp, raw),
@@ -137,6 +138,7 @@ func Convert(rec replay.Record) (Result, error) {
 }
 
 func advertRow(r Reception, a meshcore.Advert) *Advert {
+	//nolint:gosec // G115: Role is the low 4 bits of the advert flags byte.
 	row := &Advert{
 		SchemaVersion: SchemaVersion, ReceptionID: r.ReceptionID, PacketHash: r.PacketHash,
 		ObserverID: r.ObserverID, Region: r.Region, RxTime: r.RxTime,

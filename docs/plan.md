@@ -97,4 +97,13 @@
 - Verifier rounds: Go 4 (storage never retried when the spool write failed; QoS 1 backlog dropped by the rate cap; out-of-order PUBACKs, unbounded goroutines and a send-on-closed-channel panic; then comments), analytics 1, platform 1. Final design: one MQTT worker acks in arrival order, QoS 1 throttles instead of dropping.
 - Added read-side dedup by `reception_id` in analytics: delivery is at-least-once.
 - `make chaos`: 4 scenarios, zero loss (4,337/4,337, 0 duplicates). Numbers in benchmarks.md.
-- Follow-ups: scenario d's assertion is too loose to catch a missing rate cap (behaviour shown, check weak); `expected > 0` guard in the zero-loss Job; mosquitto config checksum hashes only one value; duplicated comment in own-observer.env; ingester startup log wording ("spooling to disk while object storage is down" printed with S3 up); mosquitto restart untested; cluster left on `flushAge=15s` until `make deploy`.
+- Follow-ups: mosquitto restart untested; cluster left on `flushAge=15s` until `make deploy`.
+- Phase 8 fixed: startup log wording, scenario d's check, the `expected > 0` guard, the mosquitto checksum, the duplicated comment.
+
+## Phase 8: done (2026-11-10), pending the user's review
+- Goal: every check that a reviewer would run, automated; known vulnerabilities gated; an SBOM per image; a README.
+- go-engineer: golangci-lint v2 config per module (56 + 13 findings fixed; 27 `//nolint`, each one rule with a reason). Real fixes it surfaced: anonymizer RNG PCG → ChaCha8 (PCG state is recoverable from outputs), API local store `os.OpenInRoot` (blocks symlink escape; absolute symlinks now refused), errors wrapped with `%w`. Dependency bumps: brotli, klauspost/compress (reachable per govulncheck), x/net (Trivy HIGH). Startup log wording.
+- platform-engineer: `.github/workflows/ci.yml` (go, python, helm + Trivy config, images + Trivy gate + Syft SBOM, k3d smoke), actions pinned by SHA, tools by digest, downloads by SHA-256; pip removed from the analytics image; `USER` in the smoke/chaos Dockerfiles; Phase 7 platform follow-ups (scenario d check as a tested script, `expected > 0`, mosquitto checksum, smoke values work on a deployed cluster).
+- Lead: README.md, CI pins in data-sources.md, numbers in benchmarks.md.
+- Verifier rounds: Go 1 + follow-ups, platform 1 (combined final PASS). `make smoke` passed with the new images.
+- Follow-ups: the workflow has never run on GitHub (needs `git init` + a remote); local `make smoke` can test a stale image because the tag doesn't change (CI builds fresh); one empty reply during an API rolling restart (not investigated); analytics on bookworm has 98 unfixable HIGH/CRITICAL (Debian trixie later); x/crypto advisory fixed only in a pre-release; Trivy DB not cached.

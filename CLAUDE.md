@@ -25,7 +25,7 @@ Portfolio project: every line must be explainable in an interview. Clear > cleve
 | Platform | `platform-engineer` | `deploy/`, `dashboards/`, `.github/`, `Makefile`, `**/Dockerfile`, `**/.dockerignore` |
 | Verification | `verifier` | nothing (read + run checks only) |
 | Research | `protocol-researcher` | nothing (read + web only) |
-| Lead (main session) | — | `docs/`, `CLAUDE.md`, `.claude/`, `testdata/` READMEs; assigns work and merges |
+| Lead (main session) | — | `README.md`, `docs/`, `CLAUDE.md`, `.claude/`, `testdata/` READMEs; assigns work and merges |
 
 - A lane that needs a change outside its directories stops and reports it; the lead routes it to the owner.
 - Contracts between lanes: `schema/schema.json` (Go ↔ Python) and `docs/api-contract.md` (analytics ↔ API).

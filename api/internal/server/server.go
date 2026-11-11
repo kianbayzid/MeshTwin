@@ -259,7 +259,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, data []byte) {
 		return
 	}
 	h.Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
+	_, _ = w.Write(data) //nolint:gosec // G705: data is JSON we re-encoded, sent as application/json with nosniff and a strict CSP (see instrument)
 }
 
 // etagMatch implements If-None-Match's weak comparison: "*", or any listed

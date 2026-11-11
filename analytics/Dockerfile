@@ -19,6 +19,9 @@ RUN mkdir -p /home/app && HOME=/home/app /app/.venv/bin/python -c "import duckdb
  && chmod -R a+rX /home/app
 
 FROM python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+# The jobs never install anything: drop the base image's pip (and its CVEs).
+RUN rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+      /usr/local/lib/python3.12/site-packages/pip /usr/local/lib/python3.12/site-packages/pip-*.dist-info
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /home/app /home/app
 # Numeric UID so Kubernetes runAsNonRoot can verify it. Writable paths come

@@ -43,7 +43,7 @@ func main() {
 }
 
 func run(cfg synth.Config, tr synth.Traffic, out, truthPath string) error {
-	rng := rand.New(rand.NewPCG(cfg.Seed, cfg.Seed))
+	rng := rand.New(rand.NewPCG(cfg.Seed, cfg.Seed)) //nolint:gosec // G404: synthetic data must be reproducible from a seed, not secret
 	net, err := synth.NewNetwork(cfg, rng)
 	if err != nil {
 		return err
@@ -52,10 +52,10 @@ func run(cfg synth.Config, tr synth.Traffic, out, truthPath string) error {
 	var w io.Writer = os.Stdout
 	var f *os.File
 	if out != "-" {
-		if f, err = os.Create(out); err != nil {
+		if f, err = os.Create(out); err != nil { //nolint:gosec // G304: the operator names the output file on the command line
 			return err
 		}
-		defer f.Close() // no-op after the checked Close below; covers early returns
+		defer func() { _ = f.Close() }() // no-op after the checked Close below; covers early returns
 		w = f
 	}
 	bw := bufio.NewWriter(w)
@@ -78,7 +78,7 @@ func run(cfg synth.Config, tr synth.Traffic, out, truthPath string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(truthPath, b, 0o644); err != nil {
+		if err := os.WriteFile(truthPath, b, 0o644); err != nil { //nolint:gosec // G306: synthetic ground truth, nothing secret; analytics tests read it
 			return err
 		}
 	}

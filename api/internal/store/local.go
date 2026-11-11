@@ -19,14 +19,15 @@ func (l Local) Get(_ context.Context, region, name string) ([]byte, error) {
 	if !filepath.IsLocal(rel) {
 		return nil, fmt.Errorf("summary path %q escapes the root", rel)
 	}
-	f, err := os.Open(filepath.Join(l.Root, rel))
+	// OpenInRoot also refuses a symlink that points outside Root.
+	f, err := os.OpenInRoot(l.Root, rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open summary: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
 	b, err := readCapped(f)
 	if err != nil {
 		return nil, fmt.Errorf("read summary: %w", err)

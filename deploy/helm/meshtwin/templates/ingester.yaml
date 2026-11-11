@@ -1,3 +1,15 @@
+{{- define "meshtwin.mosquittoConf" -}}
+listener 1883
+allow_anonymous false
+password_file /pw/pw
+persistence true
+persistence_location /mosquitto/data/
+autosave_interval 60
+max_queued_messages {{ .Values.mosquitto.maxQueuedMessages | int64 }}
+# Unacked QoS 1 in flight per client; must stay below the ingester's 1024-slot queue.
+max_inflight_messages 20
+log_dest stdout
+{{- end }}
 {{- if .Values.ingester.enabled }}
 {{- $c := dict "root" $ "component" "ingester" }}
 {{- $src := index .Values.ingester.sources .Values.ingester.source | required "ingester.source must be own-observer or public-broker" }}
@@ -108,16 +120,7 @@ metadata:
   labels: {{- include "meshtwin.labels" $m | nindent 4 }}
 data:
   mosquitto.conf: |
-    listener 1883
-    allow_anonymous false
-    password_file /pw/pw
-    persistence true
-    persistence_location /mosquitto/data/
-    autosave_interval 60
-    max_queued_messages {{ .Values.mosquitto.maxQueuedMessages | int64 }}
-    # Unacked QoS 1 in flight per client; must stay below the ingester's 1024-slot queue.
-    max_inflight_messages 20
-    log_dest stdout
+    {{- include "meshtwin.mosquittoConf" . | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -133,7 +136,7 @@ spec:
     metadata:
       labels: {{- include "meshtwin.labels" $m | nindent 8 }}
       annotations:
-        checksum/config: {{ .Values.mosquitto.maxQueuedMessages | toString | sha256sum | trunc 16 }}
+        checksum/config: {{ include "meshtwin.mosquittoConf" . | sha256sum | trunc 16 }} # restart on any config change
     spec:
       automountServiceAccountToken: false
       securityContext: {{- include "meshtwin.podSecurity" 1883 | nindent 8 }}

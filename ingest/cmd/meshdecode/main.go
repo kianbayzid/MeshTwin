@@ -58,9 +58,9 @@ func describe(w io.Writer, hexStr string) error {
 		return err
 	}
 	h := meshcore.Hash(p)
-	row := func(k, v string, args ...any) { fmt.Fprintf(w, "  %-16s %s\n", k, fmt.Sprintf(v, args...)) }
+	row := func(k, v string, args ...any) { _, _ = fmt.Fprintf(w, "  %-16s %s\n", k, fmt.Sprintf(v, args...)) }
 
-	fmt.Fprintf(w, "%d bytes, packet hash %X\n", len(raw), h)
+	_, _ = fmt.Fprintf(w, "%d bytes, packet hash %X\n", len(raw), h)
 	row("header", "0x%02X  route=%s type=%v version=%d", raw[0], routeNames[p.Route], p.Type, p.Version)
 	if p.HasTransportCodes() {
 		row("transport codes", "%04X %04X", p.TransportCodes[0], p.TransportCodes[1])
