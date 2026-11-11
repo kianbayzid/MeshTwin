@@ -28,6 +28,7 @@ sets how far back the node registry looks (see below). `--min-confidence 0.5` dr
 | `summaries.py` / `output.py` | contract JSON + internal Parquet, and writing them |
 | `evaluate.py` | scoring against `truth.json` |
 | `terrain.py` | `Terrain` interface: flat, grid (bilinear), Copernicus GLO-30 tiles + download |
+| `terrain_tiles.py` | Web Mercator tile math, Terrain-RGB encoding, rendering tiles from a `Terrain` |
 | `propagation.py` | `Radio` assumptions, `PropagationModel` interface, `FsplKnifeEdge` |
 | `compare.py` | residuals per measured link, surprising pairs, their JSON |
 | `placement.py` | candidate grid cells, predicted new links, reachability gain, score, JSON |
@@ -347,6 +348,35 @@ group (all 27 nodes join, +1,674 pairs) while removing 5 of the 6 SPOFs. Flat te
 further west (47.52, −122.18), between the islands. Both are the places a human would look at
 first; whether one repeater could really close a ~15 km gap is exactly what the optimistic model
 can't promise.
+
+## Terrain tiles for the 3D map (Console Phase 2)
+
+```sh
+uv run meshtwin-analytics fetch-dem --bbox 47.3,-122.6,47.9,-121.8 --dem-dir "$LOCALAPPDATA/meshtwin/dem"
+uv run meshtwin-analytics terrain-tiles --region SEA --dem-dir "$LOCALAPPDATA/meshtwin/dem" \
+    --bbox 47.3,-122.6,47.9,-121.8 --minzoom 8 --maxzoom 12 --out ./.out/terrain
+```
+
+Writes `summaries/region=SEA/terrain/{z}/{x}/{y}.png` (Mapbox Terrain-RGB, 256×256, XYZ Web
+Mercator) and `terrain.json` (`docs/api-contract.md`). `terrain_tiles.py` holds the pure math.
+
+1. **Bounds**: the bbox snapped outward to 0.1°, `[west, south, east, north]`.
+2. **Tiles**: every XYZ tile at each zoom that overlaps the bounds.
+3. **Elevation**: the GLO-30 mosaic is loaded with the same `load_glo30` → `GridTerrain` the
+   propagation model uses, and its bilinear `elevation_m` is called **once per tile** on the
+   256×256 pixel-centre grid (lon depends on the column, lat on the row: broadcast, not a loop).
+   So the 3D map shows exactly the ground the model saw. No GDAL/rasterio.
+4. Pixels outside the bounds are written as 0 m: the map shows only the box we publish (and the
+   API 404s tiles beyond it, which the map also draws flat).
+5. **Encoding**: `v = round((h + 10000) × 10)`, clamped to 24 bits; R, G, B = its three bytes;
+   PNG via `imagecodecs.png_encode`. Precision 0.1 m.
+6. **No DEM, no tiles**: if any 1° GLO-30 tile covering the bounds is missing, the command exits
+   non-zero instead of publishing flat tiles (`load_glo30` alone would read a gap as 0 m).
+
+Measured (SEA box above, z8–12): 161 tiles, 8.3 MB, DEM load 0.8 s, render + write 2.1 s
+(~75 tiles/s), elevation sampled −5.4 … 1,091 m. Spot checks on z12 tiles: Lake Washington
+3.0 m (surface ≈ 6 m NAVD88; GLO-30 flattens water and is on EGM2008, so a few metres off is
+expected), Elliott Bay 0 m, Cougar Mountain max 469 m within ~1 km of the summit (≈ 486 m).
 
 ## Future work
 - EM-lite prior: after one pass, boost candidates that were resolved often, then resolve again.

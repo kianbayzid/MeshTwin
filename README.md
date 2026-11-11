@@ -82,6 +82,7 @@ Node locations are often people's homes. So:
 | [docs/benchmarks.md](docs/benchmarks.md) | every measured number, with how to reproduce it |
 | [docs/data-sources.md](docs/data-sources.md) | data sources, their terms, pinned images |
 | [docs/ai-workflow.md](docs/ai-workflow.md) | how the AI-assisted build is organised: lanes, an independent verifier, hooks |
+| [docs/interview-prep.md](docs/interview-prep.md) | the design decisions as questions, with short answers |
 
 ## Limits, honestly
 

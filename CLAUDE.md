@@ -10,6 +10,7 @@ Portfolio project: every line must be explainable in an interview. Clear > cleve
 |------|----------|
 | `/ingest` | Go ingester: MQTT/replay/synthetic sources, decoder, Parquet writer, DDIL buffer |
 | `/api` | Go read-only REST API + static Leaflet page |
+| `/web` | Vite + React + TS console (MapLibre 3D map); see `docs/frontend.md` |
 | `/analytics` | Python (uv): topology, propagation, comparison, resilience, placement |
 | `/schema` | Parquet schema definition + docs (single source of truth) |
 | `/testdata` | Small recorded capture (NDJSON) + synthetic generator |
@@ -25,6 +26,7 @@ Portfolio project: every line must be explainable in an interview. Clear > cleve
 | Platform | `platform-engineer` | `deploy/`, `dashboards/`, `.github/`, `Makefile`, `**/Dockerfile`, `**/.dockerignore` |
 | Verification | `verifier` | nothing (read + run checks only) |
 | Research | `protocol-researcher` | nothing (read + web only) |
+| Frontend | lead (main session) for now | `web/` |
 | Lead (main session) | — | `README.md`, `docs/`, `CLAUDE.md`, `.claude/`, `testdata/` READMEs; assigns work and merges |
 
 - A lane that needs a change outside its directories stops and reports it; the lead routes it to the owner.

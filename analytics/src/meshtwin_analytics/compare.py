@@ -13,16 +13,24 @@ from typing import Any
 import numpy as np
 
 from .aggregate import LinkEvidence, percentile
-from .geo import haversine_km, snap
+from .geo import GRID_DEG, haversine_km, snap
 from .model import Node
 from .pipeline import TopologyRun
-from .propagation import LinkPrediction, PropagationModel, Radio, Site
+from .propagation import (
+    K_FACTOR,
+    FsplKnifeEdge,
+    LinkPrediction,
+    PropagationModel,
+    Radio,
+    Site,
+)
 from .summaries import meta, public_id
 
 SOURCE = "propagation-job"
 STRONG_MARGIN_DB = 10.0  # "predicted strong" = this far above the demodulation floor
 MAX_UNSEEN_DISTANCE_KM = 30.0
 MAX_UNSEEN = 50
+PROFILE_MAX_POINTS = 256  # per published profile (docs/api-contract.md)
 IMPOSSIBLE_REASONS = ["hop-hash misattribution", "ducting", "DEM misses a tall mast"]
 UNSEEN_REASONS = ["building clutter", "antenna/feedline fault", "node misconfigured"]
 
@@ -105,6 +113,56 @@ def public_distance_km(a: Node, b: Node) -> float:
     ca, cb = snap(a.lat, a.lon), snap(b.lat, b.lon)
     assert ca is not None and cb is not None
     return round(haversine_km(ca["lat"], ca["lon"], cb["lat"], cb["lon"]), 1)
+
+
+def public_site(node: Node, radio: Radio) -> Site | None:
+    """The node's SNAPPED cell centre as a Site: the only position a published path may use."""
+    c = snap(node.lat, node.lon)
+    return None if c is None else Site(c["lat"], c["lon"], radio.antenna_height_m(node.role))
+
+
+def profile(model: FsplKnifeEdge, a: Node, b: Node, radio: Radio) -> dict[str, Any] | None:
+    """The terrain profile a -> b between the two snapped cells (docs/api-contract.md), or
+    None when either end is unlocated or both share a cell.
+
+    Privacy: an elevation sequence along the exact path could be matched against the public
+    DEM to recover a position, so only snapped Sites ever reach the geometry here.
+    """
+    sa, sb = public_site(a, radio), public_site(b, radio)
+    if sa is None or sb is None or (sa.lat, sa.lon) == (sb.lat, sb.lon):
+        return None
+    full = model.geometry(sa, sb)  # model resolution: the same numbers predict() gives
+    chart = model.geometry(sa, sb, PROFILE_MAX_POINTS)  # same rule, fewer points to ship
+    return {
+        "a": public_id(a.key),
+        "b": public_id(b.key),
+        "distance_km": public_distance_km(a, b),
+        "antenna_a_m": round(sa.height_m, 1),
+        "antenna_b_m": round(sb.height_m, 1),
+        "ground_m": np.round(chart.ground_m, 1).tolist(),
+        "bulge_m": np.round(chart.bulge_m, 1).tolist(),
+        "fresnel_r1_m": np.round(chart.fresnel_r1_m, 1).tolist(),
+        "line_of_sight": full.line_of_sight,
+        "fresnel_clearance": round(full.fresnel_clearance, 2),
+        "diffraction_loss_db": round(full.diffraction_loss_db, 1),
+    }
+
+
+def profiles(run: TopologyRun, model: FsplKnifeEdge, radio: Radio) -> list[dict[str, Any]]:
+    """A profile for every exported topology link (a < b, sorted) with a located end in each
+    of two different cells."""
+    out = []
+    for a, b in sorted((min(u, v), max(u, v)) for u, v in run.graph.edges):
+        if (p := profile(model, run.nodes[a], run.nodes[b], radio)) is not None:
+            out.append(p)
+    return out
+
+
+def profiles_json(
+    run: TopologyRun, rows: list[dict[str, Any]], model: dict[str, str], radio: Radio
+) -> dict[str, Any]:
+    params = {"freq_mhz": radio.freq_mhz, "k_factor": round(K_FACTOR, 3), "grid_deg": GRID_DEG}
+    return {"meta": meta(run, SOURCE), "model": model, "params": params, "profiles": rows}
 
 
 def _link(run: TopologyRun, a: str, b: str, p: LinkPrediction) -> dict[str, Any]:

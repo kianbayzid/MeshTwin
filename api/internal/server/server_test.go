@@ -158,6 +158,11 @@ func (s *spyStore) Get(ctx context.Context, region, name string) ([]byte, error)
 	return s.Store.Get(ctx, region, name)
 }
 
+func (s *spyStore) Tile(ctx context.Context, region string, z, x, y int) ([]byte, error) {
+	s.calls = append(s.calls, region+"/tile")
+	return s.Store.Tile(ctx, region, z, x, y)
+}
+
 func (s *spyStore) List(ctx context.Context) (map[string][]string, error) {
 	s.calls = append(s.calls, "list")
 	return s.Store.List(ctx)

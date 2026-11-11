@@ -22,10 +22,12 @@ func contractExamples(t *testing.T) map[string]map[string]any {
 	if err != nil {
 		t.Fatalf("read contract: %v", err)
 	}
-	// Identify each example by a key only it has.
+	// Identify each example by a key only it has. ("model" is in residuals and
+	// the profile response, so residuals is found by "summary".)
 	marker := map[string]string{
-		"regions": "regions", "stats": "topology", "baseline": "resilience", "model": "residuals",
-		"observed_but_predicted_impossible": "surprising", "candidates": "placement",
+		"regions": "regions", "stats": "topology", "baseline": "resilience", "summary": "residuals",
+		"observed_but_predicted_impossible": "surprising", "params": "profiles", "candidates": "placement",
+		"encoding": "terrain",
 	}
 	out := map[string]map[string]any{}
 	for _, m := range regexp.MustCompile("(?s)```json\r?\n(.*?)```").FindAllStringSubmatch(string(doc), -1) {
@@ -47,6 +49,17 @@ func contractExamples(t *testing.T) map[string]map[string]any {
 
 // keyPaths lists every object key path in v ("links[].snr_db.median");
 // arrays contribute the union of their elements' keys.
+// storedForm is the file a job writes for name. Every example is that file,
+// except profiles: the example is one route response, and profiles.json holds
+// its entries in a list.
+func storedForm(ex map[string]map[string]any, name string) map[string]any {
+	p := ex[name]
+	if name != "profiles" {
+		return p
+	}
+	return map[string]any{"meta": p["meta"], "model": p["model"], "params": p["params"], "profiles": []any{p["profile"]}}
+}
+
 func keyPaths(prefix string, v any, out map[string]bool) {
 	switch v := v.(type) {
 	case map[string]any:
@@ -79,7 +92,7 @@ func TestContractExamples(t *testing.T) {
 	ex := contractExamples(t)
 	root := t.TempDir()
 	for _, name := range store.Names {
-		b, _ := json.Marshal(ex[name])
+		b, _ := json.Marshal(storedForm(ex, name))
 		writeSummary(t, root, "SEA", name, string(b))
 	}
 	h := New(store.Local{Root: root}, Embedded, time.Minute).Handler()
@@ -88,7 +101,9 @@ func TestContractExamples(t *testing.T) {
 		"resilience": "/api/v1/regions/SEA/resilience",
 		"residuals":  "/api/v1/regions/SEA/links/residuals",
 		"surprising": "/api/v1/regions/SEA/links/surprising",
+		"profiles":   "/api/v1/regions/SEA/links/3491927B/351FC1F9/profile",
 		"placement":  "/api/v1/regions/SEA/placement",
+		"terrain":    "/api/v1/regions/SEA/terrain.json",
 	} {
 		rec := get(t, h, url)
 		if rec.Code != 200 {
@@ -116,6 +131,10 @@ func TestRealAnalyticsOutput(t *testing.T) {
 		{"/api/v1/regions/SEA/links/residuals?sort=observations&limit=5", 200},
 		{"/api/v1/regions/SEA/links/surprising", 200},
 		{"/api/v1/regions/SEA/placement?top=3", 200},
+		{"/api/v1/regions/SEA/terrain.json", 200},
+		{"/api/v1/regions/SEA/terrain/8/40/89.png", 200},
+		{"/api/v1/regions/SEA/links/04080AC9/3491927B/profile", 200},
+		{"/api/v1/regions/SEA/links/351FC1F9/0562C16B/profile", 200},
 	} {
 		if rec := get(t, h, tc.url); rec.Code != tc.status {
 			t.Errorf("%s: status %d, want %d: %.200s", tc.url, rec.Code, tc.status, rec.Body)
@@ -142,7 +161,7 @@ func TestRealAnalyticsOutput(t *testing.T) {
 	if err := json.Unmarshal(get(t, h, "/api/v1/regions").Body.Bytes(), &regions); err != nil || len(regions.Regions) != 1 {
 		t.Fatalf("regions: %v %+v", err, regions)
 	}
-	if r := regions.Regions[0]; r.Region != "SEA" || len(r.Summaries) != 5 || r.Nodes == nil {
+	if r := regions.Regions[0]; r.Region != "SEA" || len(r.Summaries) != 7 || r.Nodes == nil {
 		t.Errorf("SEA = %+v", r)
 	}
 }
@@ -178,7 +197,7 @@ func TestAllowListMatchesContract(t *testing.T) {
 	ex := contractExamples(t)
 	for _, name := range store.Names {
 		want := map[string]string{}
-		shapeOf("", ex[name], want)
+		shapeOf("", storedForm(ex, name), want)
 		if !maps.Equal(allowed[name], want) {
 			for p, k := range want {
 				if allowed[name][p] != k {

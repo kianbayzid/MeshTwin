@@ -5,12 +5,13 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
 )
 
-// ErrNotFound means the summary file does not exist (yet).
+// ErrNotFound means the summary or tile does not exist (yet).
 var ErrNotFound = errors.New("summary not found")
 
 // MaxBytes caps one summary read. Real summaries are well under 1 MB; the cap
@@ -20,14 +21,18 @@ const MaxBytes = 8 << 20
 // ErrTooLarge means the summary is over MaxBytes; it is not served.
 var ErrTooLarge = errors.New("summary larger than the size cap")
 
-// readCapped reads r up to MaxBytes. It reads one byte more to tell
+// MaxTileBytes caps one terrain tile (docs/api-contract.md: 1 MB). A real
+// 256x256 Terrain-RGB PNG is tens of KB.
+const MaxTileBytes = 1 << 20
+
+// readCapped reads r up to limit bytes. It reads one byte more to tell
 // "exactly at the cap" from "over it".
-func readCapped(r io.Reader) ([]byte, error) {
-	b, err := io.ReadAll(io.LimitReader(r, MaxBytes+1))
+func readCapped(r io.Reader, limit int) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > MaxBytes {
+	if len(b) > limit {
 		return nil, ErrTooLarge
 	}
 	return b, nil
@@ -35,13 +40,26 @@ func readCapped(r io.Reader) ([]byte, error) {
 
 // Names are the summaries the API serves, in display order. Any other file
 // under summaries/ is ignored, so a stray object never becomes a route.
-var Names = []string{"topology", "resilience", "residuals", "surprising", "placement"}
+var Names = []string{"topology", "resilience", "residuals", "surprising", "profiles", "placement", "terrain"}
+
+// summaryKey is the object key of one summary, relative to the root.
+func summaryKey(region, name string) string {
+	return "summaries/region=" + region + "/" + name + ".json"
+}
+
+// tileKey is the object key of one terrain tile. Built only from a validated
+// region and integers, so it cannot contain "..", separators or other syntax.
+func tileKey(region string, z, x, y int) string {
+	return fmt.Sprintf("summaries/region=%s/terrain/%d/%d/%d.png", region, z, x, y)
+}
 
 // Store is the read side of the summary bucket. Callers validate region and
 // name before calling: both become part of a path or object key.
 type Store interface {
 	// Get returns the raw bytes of one summary, or ErrNotFound.
 	Get(ctx context.Context, region, name string) ([]byte, error)
+	// Tile returns the raw bytes of one terrain tile (capped at MaxTileBytes), or ErrNotFound.
+	Tile(ctx context.Context, region string, z, x, y int) ([]byte, error)
 	// List returns region -> summary names present (only names in Names).
 	// It doubles as the readiness check: it fails when storage is unreachable.
 	List(ctx context.Context) (map[string][]string, error)

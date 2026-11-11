@@ -78,6 +78,7 @@ SUMMARIES = {
     "residuals": "propagation-job",
     "surprising": "propagation-job",
     "placement": "placement-job",
+    "profiles": "propagation-job",
 }
 
 
@@ -209,10 +210,18 @@ def _conforms(got: Any, want: Any, path: str) -> list[str]:
 ENDPOINTS = {"residuals": "links/residuals", "surprising": "links/surprising"}
 
 
+def _contract_shape(name: str) -> dict[str, Any]:
+    if name != "profiles":
+        return _contract_example(ENDPOINTS.get(name, name))
+    # profiles.json is the profile endpoint's example with "profile" as a list "profiles".
+    ex = _contract_example("links/{a}/{b}/profile")
+    return {k: v for k, v in ex.items() if k != "profile"} | {"profiles": [ex["profile"]]}
+
+
 @pytest.mark.parametrize("name", sorted(SUMMARIES))
 def test_contract(out_dir: Path, name: str) -> None:
     doc = _summary(out_dir, name)
-    assert _conforms(doc, _contract_example(ENDPOINTS.get(name, name)), name) == []
+    assert _conforms(doc, _contract_shape(name), name) == []
     assert doc["meta"]["source"] == SUMMARIES[name]
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", doc["meta"]["window"]["to"])
 
@@ -279,3 +288,35 @@ def test_collisions_cost_something(run_hash1: TopologyRun, run_hash3: TopologyRu
     assert e1.ambiguous_hops / e1.hop_entries > 0.01
     assert e3.ambiguous_hops == 0
     assert run_hash1.cache_hit_rate > 0.8  # identical chains repeat: the memo pays off
+
+
+def test_profiles_cover_located_links(out_dir: Path) -> None:
+    """One profile per topology link with both ends located in different cells, in the
+    topology's orientation, sharing distance_km with residuals."""
+    topo = _summary(out_dir, "topology")
+    loc = {n["id"]: n["location"] for n in topo["nodes"]}
+    want = [
+        (lk["a"], lk["b"])
+        for lk in topo["links"]
+        if loc[lk["a"]] and loc[lk["b"]] and loc[lk["a"]] != loc[lk["b"]]
+    ]
+    doc = _summary(out_dir, "profiles")
+    profs = doc["profiles"]
+    assert [(p["a"], p["b"]) for p in profs] == want and want
+    assert doc["model"] == _summary(out_dir, "residuals")["model"]
+    assert doc["params"] == {"freq_mhz": 910.525, "k_factor": 1.333, "grid_deg": 0.01}
+    residuals = _summary(out_dir, "residuals")["links"]
+    residual_km = {(r["a"], r["b"]): r["distance_km"] for r in residuals}
+    for p in profs:
+        n = len(p["ground_m"])
+        assert 2 <= n <= 256 and len(p["bulge_m"]) == len(p["fresnel_r1_m"]) == n
+        for key in ("bulge_m", "fresnel_r1_m"):
+            assert p[key][0] == p[key][-1] == 0
+        assert p["ground_m"] == [0] * n  # fixtures run without a DEM
+        assert p["distance_km"] == residual_km.get((p["a"], p["b"]), p["distance_km"])
+
+
+def test_profiles_written_compact(out_dir: Path) -> None:
+    """The API refuses a summary over 8 MB; indentation alone would double profiles.json."""
+    text = (out_dir / "summaries" / "region=SEA" / "profiles.json").read_text(encoding="utf-8")
+    assert "\n" not in text and ", " not in text and ": " not in text

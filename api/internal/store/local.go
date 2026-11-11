@@ -14,10 +14,19 @@ import (
 type Local struct{ Root string }
 
 func (l Local) Get(_ context.Context, region, name string) ([]byte, error) {
-	rel := filepath.Join("summaries", "region="+region, name+".json")
+	return l.read(summaryKey(region, name), MaxBytes)
+}
+
+func (l Local) Tile(_ context.Context, region string, z, x, y int) ([]byte, error) {
+	return l.read(tileKey(region, z, x, y), MaxTileBytes)
+}
+
+// read returns the file at key (slash-separated, relative to Root), up to limit bytes.
+func (l Local) read(key string, limit int) ([]byte, error) {
+	rel := filepath.FromSlash(key)
 	// Second line of defence after ValidRegion: never leave Root.
 	if !filepath.IsLocal(rel) {
-		return nil, fmt.Errorf("summary path %q escapes the root", rel)
+		return nil, fmt.Errorf("path %q escapes the root", rel)
 	}
 	// OpenInRoot also refuses a symlink that points outside Root.
 	f, err := os.OpenInRoot(l.Root, rel)
@@ -25,12 +34,12 @@ func (l Local) Get(_ context.Context, region, name string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open summary: %w", err)
+		return nil, fmt.Errorf("open %s: %w", key, err)
 	}
 	defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
-	b, err := readCapped(f)
+	b, err := readCapped(f, limit)
 	if err != nil {
-		return nil, fmt.Errorf("read summary: %w", err)
+		return nil, fmt.Errorf("read %s: %w", key, err)
 	}
 	return b, nil
 }

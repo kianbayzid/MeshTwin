@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  GO_VERSION: "1.27.3" # = golang image in the Dockerfiles: test with the compiler that builds the binary
+  GO_VERSION: "1.27.4" # = golang image in the Dockerfiles: test with the compiler that builds the binary
   GOLANGCI_LINT_IMAGE: golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
   GOVULNCHECK: golang.org/x/vuln/cmd/govulncheck@v1.9.0
   TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
@@ -75,7 +75,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.7" # = analytics/Dockerfile; uv only installs Pythons it lists, 0.13.1 stops at 3.12.15
           python-version: "3.12.16" # = python image in analytics/Dockerfile
           enable-cache: true
           cache-dependency-glob: analytics/uv.lock

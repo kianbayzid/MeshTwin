@@ -122,6 +122,34 @@ var allowed = map[string]map[string]string{
 		"predicted_strong_but_never_seen[].possible_reasons[]":   "string",
 		"predicted_strong_but_never_seen[].predicted_snr_db":     "number",
 	}),
+	// profiles.json is the stored file (a list); the route serves one entry
+	// as "profile". Values are checked in checkProfiles.
+	"profiles": withMeta(map[string]string{
+		"model":                          "object",
+		"model.dem":                      "string",
+		"model.name":                     "string",
+		"model.version":                  "string",
+		"params":                         "object",
+		"params.freq_mhz":                "number",
+		"params.grid_deg":                "number",
+		"params.k_factor":                "number",
+		"profiles":                       "array",
+		"profiles[]":                     "object",
+		"profiles[].a":                   "string",
+		"profiles[].antenna_a_m":         "number",
+		"profiles[].antenna_b_m":         "number",
+		"profiles[].b":                   "string",
+		"profiles[].bulge_m":             "array",
+		"profiles[].bulge_m[]":           "number",
+		"profiles[].diffraction_loss_db": "number",
+		"profiles[].distance_km":         "number",
+		"profiles[].fresnel_clearance":   "number",
+		"profiles[].fresnel_r1_m":        "array",
+		"profiles[].fresnel_r1_m[]":      "number",
+		"profiles[].ground_m":            "array",
+		"profiles[].ground_m[]":          "number",
+		"profiles[].line_of_sight":       "bool",
+	}),
 	"placement": withMeta(map[string]string{
 		"candidates":                                "array",
 		"candidates[]":                              "object",
@@ -147,6 +175,24 @@ var allowed = map[string]map[string]string{
 		"method.grid_deg":                           "number",
 		"method.model":                              "string",
 	}),
+	// Terrain is not data from a time window: meta.window must be null (the
+	// only summary where it may be). Values are checked in checkTerrain.
+	"terrain": {
+		"meta":                "object",
+		"meta.schema_version": "number",
+		"meta.region":         "string",
+		"meta.generated_at":   "time",
+		"meta.window":         "null",
+		"meta.source":         "string",
+		"bounds":              "array",
+		"bounds[]":            "number",
+		"dem":                 "string",
+		"encoding":            "string",
+		"maxzoom":             "number",
+		"minzoom":             "number",
+		"tile_size":           "number",
+		"tiles":               "number",
+	},
 }
 
 // withMeta adds the meta envelope every summary carries.

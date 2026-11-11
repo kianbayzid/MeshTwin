@@ -55,6 +55,16 @@ Before reading a community's feed, check that the broker's terms allow third-par
 
 The map also shows the Copernicus attribution (Terrain section), because residuals and placement are derived from the DEM.
 
+## Console basemap (frontend Phase 2)
+
+| source | terms | how we comply |
+|---|---|---|
+| Protomaps daily planet build (`build.protomaps.com/YYYYMMDD.pmtiles`), vector tiles from OpenStreetMap | Data: [ODbL](https://opendatacommons.org/licenses/odbl/) via OSM, attribution "© OpenStreetMap contributors" required. Protomaps asks for credit; build files are public downloads (HTTP Range) | `web/scripts/fetch-basemap.sh` reads the build list from `build-metadata.protomaps.dev/builds.json` (newest daily build), then extracts **once** with `pmtiles extract` (go-pmtiles v1.31.2, pinned) for the region box only, max zoom 14. The file is served by us, never hotlinked, not committed (`.gitignore`). Attribution shown in the map's attribution control. |
+| `@protomaps/basemaps` 5.7.2 (BSD-3-Clause), `pmtiles` 4.5.0 (BSD-3-Clause), `maplibre-gl` 5 (BSD-3-Clause) | npm packages, bundled into `web/dist` | versions pinned in `web/package-lock.json` |
+
+- The console makes **no third-party requests** at runtime: basemap, terrain tiles, fonts and icons are all same-origin.
+  No external terrain fallback exists; without terrain tiles the map is flat.
+
 ## Privacy rules that apply to all sources
 - Metadata only. Payloads are not decrypted and not stored.
 - Advert locations are stored exactly in private storage only. Any output is snapped to ~1 km.
@@ -67,10 +77,10 @@ The map also shows the Copernicus attribution (Terrain section), because residua
 |---|---|---|
 | S3 object store | `chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59` (from the maintainer, Chris Lu) | Chosen by the user in Phase 6, replacing a community MinIO rebuild (MinIO stopped publishing images in 2025). Runs `weed mini` (single node, S3 on 8333) as non-root with a read-only root fs; telemetry to seaweedfs.com turned off (`-master.telemetry=false`). With no credentials it would allow all access, so compose refuses to start without `S3_SECRET_KEY` and the chart always generates one. The code only speaks plain S3 (path-style), so the store stays swappable. |
 | Mosquitto | `eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279` (official) | Setting 1 only |
-| Go build | `golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0` (official) | build stage only |
+| Go build | `golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea` (official) | build stage only |
 | Go runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` (official) | ingester, API: no shell, non-root |
 | Python runtime | `python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df` (official) | analytics CronJobs; DuckDB `httpfs` baked in at build time so jobs never download extensions |
-| uv | `ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336` (official, Astral) | build stage only |
+| uv | `ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490` (official, Astral) | build stage only |
 | Prometheus | `prom/prometheus:v3.16.0-distroless@sha256:e8b8fb0e336fe0affce6f9ea347b11d24975465fd3ba8119420186679c3efd5f` (official) | |
 | Grafana | `grafana/grafana:13.2.5@sha256:9f7aa1e1e3246aade5792d35a738049f7f32f89cd51d1956cf426a4e86268a84` (official) | |
 | k3s (k3d node) | `rancher/k3s:v1.35.5-k3s1@sha256:2074403abe1bded11ef3dde09d457e13be8e0b64c218b1c4f8269b4565cfbc65` (official) | local cluster only |
@@ -96,7 +106,7 @@ Actions are pinned by commit SHA (a tag can be moved; a SHA can't). Tool images 
 | k3d-linux-amd64 | v5.9.0 | sha256 `06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0` |
 | kubectl linux/amd64 | v1.35.5 (matches k3s) | sha256 `90f75ea6ecc9ea5633262e1c0b83a40560003b30fc94a04cb099404fcef0c224` |
 | govulncheck | v1.9.0 | `go run …@v1.9.0`, verified by the Go checksum database |
-| uv / Python | 0.13.1 / 3.12.16 | via setup-uv |
+| uv / Python | 0.13.7 / 3.12.16 | via setup-uv |
 
 ## Broker politeness under QoS 1 (Phase 7)
 

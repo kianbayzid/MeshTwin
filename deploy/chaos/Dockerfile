@@ -8,7 +8,7 @@
 #   docker build -f deploy/chaos/Dockerfile --build-context testdata=testdata/synthetic ingest
 ARG ANALYTICS_IMAGE=meshtwin/analytics:0.7.0
 
-FROM golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS build
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -9,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"io/fs"
 	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,7 +71,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/regions/{region}/resilience", s.summaryHandler("resilience", nil))
 	mux.HandleFunc("GET /api/v1/regions/{region}/links/residuals", s.summaryHandler("residuals", residualsQuery))
 	mux.HandleFunc("GET /api/v1/regions/{region}/links/surprising", s.summaryHandler("surprising", nil))
+	mux.HandleFunc("GET /api/v1/regions/{region}/links/{a}/{b}/profile", s.profile)
 	mux.HandleFunc("GET /api/v1/regions/{region}/placement", s.summaryHandler("placement", placementQuery))
+	mux.HandleFunc("GET /api/v1/regions/{region}/terrain.json", s.summaryHandler("terrain", nil))
+	// A wildcard must be a whole segment, so "{y}.png" is matched as {file} and parsed in tile.
+	mux.HandleFunc("GET /api/v1/regions/{region}/terrain/{z}/{x}/{file}", s.tile)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, s.static, "index.html") })
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(s.static)))
 	return instrument(mux)
@@ -87,11 +94,8 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) summaryHandler(name string, q query) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ASCII check first: strings.ToUpper maps "ſ" to "S" and the Kelvin sign to "K".
-		raw := r.PathValue("region")
-		region := strings.ToUpper(raw)
-		if strings.ContainsFunc(raw, func(c rune) bool { return c > unicode.MaxASCII }) || !store.ValidRegion(region) {
-			writeError(w, http.StatusBadRequest, "bad_request", "region must be 2-8 ASCII letters or digits")
+		region, ok := regionParam(w, r)
+		if !ok {
 			return
 		}
 		var rewrite func([]byte) ([]byte, error)
@@ -116,6 +120,84 @@ func (s *Server) summaryHandler(name string, q query) http.HandlerFunc {
 		}
 		writeJSON(w, r, data)
 	}
+}
+
+// regionParam returns the request's region, upper-cased, or writes a 400 and
+// returns false. The region becomes part of a storage key: a trust boundary.
+func regionParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	// ASCII check first: strings.ToUpper maps "ſ" to "S" and the Kelvin sign to "K".
+	raw := r.PathValue("region")
+	region := strings.ToUpper(raw)
+	if strings.ContainsFunc(raw, func(c rune) bool { return c > unicode.MaxASCII }) || !store.ValidRegion(region) {
+		writeError(w, http.StatusBadRequest, "bad_request", "region must be 2-8 ASCII letters or digits")
+		return "", false
+	}
+	return region, true
+}
+
+// maxTileZoom is the deepest zoom the contract allows.
+const maxTileZoom = 14
+
+// tile serves one Terrain-RGB PNG. Tiles are not cached in memory: there can
+// be many, each up to 1 MB, so a map would grow without bound, and clients
+// already cache them for an hour (max-age=3600, then a 304 by ETag).
+// shortcut: every request reads storage; add a small LRU if storage load shows up.
+func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
+	region, ok := regionParam(w, r)
+	if !ok {
+		return
+	}
+	yStr, isPNG := strings.CutSuffix(r.PathValue("file"), ".png")
+	z, zOK := tileCoord(r.PathValue("z"), maxTileZoom+1)
+	x, xOK := tileCoord(r.PathValue("x"), 1<<z)
+	y, yOK := tileCoord(yStr, 1<<z)
+	if !isPNG || !zOK || !xOK || !yOK {
+		writeError(w, http.StatusBadRequest, "bad_request",
+			"tile must be {z}/{x}/{y}.png: decimal integers without sign or leading zeros, 0 <= z <= 14, 0 <= x, y < 2^z")
+		return
+	}
+	b, err := s.store.Tile(r.Context(), region, z, x, y)
+	if err == nil {
+		err = checkTile(b)
+	}
+	switch {
+	case err == nil:
+		writeBody(w, r, b, "image/png", "max-age=3600")
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no terrain tile %d/%d/%d for region %s", z, x, y, region))
+	case errors.Is(err, store.ErrTooLarge), errors.Is(err, errInvalid):
+		validationFailures.WithLabelValues("terrain_tile").Inc()
+		slog.Error("terrain tile failed validation; not serving it", "region", region, "z", z, "x", x, "y", y, "err", err)
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "terrain tile is not available")
+	default:
+		slog.Error("load terrain tile", "region", region, "z", z, "x", x, "y", y, "err", err)
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "summary store unavailable")
+	}
+}
+
+// tileCoord parses s as a tile coordinate in [0, limit). Only the canonical
+// form is accepted (ASCII digits only: no sign, no leading zeros, at most 5
+// digits, enough for 2^14), so each tile has exactly one URL and Atoi can
+// neither fail nor overflow.
+func tileCoord(s string, limit int) (int, bool) {
+	if s == "" || len(s) > 5 || len(s) > 1 && s[0] == '0' || strings.ContainsFunc(s, func(c rune) bool { return c < '0' || c > '9' }) {
+		return 0, false
+	}
+	n, _ := strconv.Atoi(s) // cannot fail: 1-5 ASCII digits
+	return n, n < limit
+}
+
+// checkTile accepts only a PNG of the contract's size. DecodeConfig checks the
+// 8-byte signature and reads the IHDR header; the pixels are not decoded.
+func checkTile(b []byte) error {
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		return fmt.Errorf("%w: %w", errInvalid, err)
+	}
+	if cfg.Width != 256 || cfg.Height != 256 {
+		return fmt.Errorf("%w: tile is %dx%d, want 256x256", errInvalid, cfg.Width, cfg.Height)
+	}
+	return nil
 }
 
 // summary returns a validated summary, re-encoded from what was checked. A
@@ -226,7 +308,8 @@ func (s *Server) regions(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(data, &head) != nil {
 				continue
 			}
-			if t := head.Meta.GeneratedAt.UTC(); info.UpdatedAt == nil || t.After(*info.UpdatedAt) {
+			// Terrain changes only with the DEM; it says nothing about how fresh the mesh data is.
+			if t := head.Meta.GeneratedAt.UTC(); name != "terrain" && (info.UpdatedAt == nil || t.After(*info.UpdatedAt)) {
 				info.UpdatedAt = &t
 			}
 			if name == "topology" && head.Stats != nil {
@@ -249,17 +332,23 @@ func (s *Server) regions(w http.ResponseWriter, r *http.Request) {
 // re-encoded summary, after any filtering), so a filtered response gets its
 // own. A matching If-None-Match gets 304 and no body.
 func writeJSON(w http.ResponseWriter, r *http.Request, data []byte) {
+	writeBody(w, r, data, "application/json", "max-age=60")
+}
+
+// writeBody sends data with an ETag that is a hash of the bytes; a matching
+// If-None-Match gets 304 and no body.
+func writeBody(w http.ResponseWriter, r *http.Request, data []byte, contentType, cacheControl string) {
 	sum := sha256.Sum256(data)
 	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
 	h := w.Header()
 	h.Set("ETag", etag)
-	h.Set("Cache-Control", "max-age=60")
+	h.Set("Cache-Control", cacheControl)
 	if etagMatch(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	h.Set("Content-Type", "application/json")
-	_, _ = w.Write(data) //nolint:gosec // G705: data is JSON we re-encoded, sent as application/json with nosniff and a strict CSP (see instrument)
+	h.Set("Content-Type", contentType)
+	_, _ = w.Write(data) //nolint:gosec // G705: data is JSON we re-encoded or a PNG whose header we checked, sent with its own Content-Type, nosniff and a strict CSP (see instrument)
 }
 
 // etagMatch implements If-None-Match's weak comparison: "*", or any listed
