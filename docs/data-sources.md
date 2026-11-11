@@ -74,5 +74,11 @@ The map also shows the Copernicus attribution (Terrain section), because residua
 | Prometheus | `prom/prometheus:v3.16.0-distroless@sha256:e8b8fb0e336fe0affce6f9ea347b11d24975465fd3ba8119420186679c3efd5f` (official) | |
 | Grafana | `grafana/grafana:13.2.5@sha256:9f7aa1e1e3246aade5792d35a738049f7f32f89cd51d1956cf426a4e86268a84` (official) | |
 | k3s (k3d node) | `rancher/k3s:v1.35.5-k3s1@sha256:2074403abe1bded11ef3dde09d457e13be8e0b64c218b1c4f8269b4565cfbc65` (official) | local cluster only |
+| Chaos test image | `meshtwin/chaos:test`: built from the pinned `golang` base + our analytics image; nothing new pulled | **Test only** (`make chaos`): bundles `mqttreplay` and the synthetic `sea-seed1-10m.ndjson`. Never in default values. |
 
 Our own images (`meshtwin/*:0.6.0`) are imported straight into k3d; there is no registry yet, so they have tags, not digests.
+
+## Broker politeness under QoS 1 (Phase 7)
+
+- **own-observer** (your broker): QoS 1 + persistent session, so the broker queues messages while the ingester restarts. `MQTT_MAX_PER_SEC` is 500 there: it's our own broker, and the backlog after a restart arrives in a burst.
+- **public-broker**: stays QoS 0 with a clean session. A persistent session would make a community broker hold a queue for us, which isn't ours to ask for.

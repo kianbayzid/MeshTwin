@@ -3,6 +3,7 @@
 #
 #   make cluster images smoke   # end to end on TEST DATA (synthetic fixture)
 #   make deploy                 # real settings (values.yaml), no test data
+#   make chaos                  # DDIL chaos demo + zero-loss check (TEST DATA, ~25 min)
 #   make clean
 #
 # kubectl/helm always name the context explicitly; nothing uses the current one.
@@ -10,7 +11,7 @@
 CLUSTER := meshtwin
 CTX     := k3d-$(CLUSTER)
 NS      := meshtwin
-TAG     := 0.6.0# must match images.* in deploy/helm/meshtwin/values.yaml
+TAG     := 0.7.0# must match images.* in deploy/helm/meshtwin/values.yaml
 CHART   := deploy/helm/meshtwin
 KUBECTL := kubectl --context $(CTX) -n $(NS)
 HELM    := helm --kube-context $(CTX) -n $(NS)
@@ -21,7 +22,7 @@ CHART_FILES := --set-file grafana.dashboard=dashboards/meshtwin.json \
                --set-file prometheus.rules=dashboards/alerts.yml
 VALUES  :=
 
-.PHONY: cluster images deploy smoke lint clean
+.PHONY: cluster images deploy smoke chaos lint clean
 
 cluster:
 	k3d cluster create --config deploy/k3d/cluster.yaml --wait
@@ -54,6 +55,18 @@ smoke:
 	sleep 31 # the API caches summaries for 30 s
 	curl -fsS $(API_URL)/api/v1/regions | grep -q '"SEA"' && echo "smoke OK: $(API_URL)/api/v1/regions lists SEA"
 	curl -fsS -o /dev/null $(API_URL)/ && echo "map OK: $(API_URL)/"
+
+# DDIL chaos demo (deploy/chaos/chaos.sh). TEST DATA: builds the test-only chaos
+# image (mqttreplay + synthetic capture + expected ids), redeploys with a short
+# FLUSH_AGE so outages spool within seconds, wipes s3://meshtwin/receptions/,
+# breaks S3/ingester while publishing, and fails unless no reception is lost.
+# `make deploy` afterwards restores flushAge.
+chaos:
+	docker build -t meshtwin/chaos:test --build-arg ANALYTICS_IMAGE=meshtwin/analytics:$(TAG) \
+		--build-context testdata=testdata/synthetic -f deploy/chaos/Dockerfile ingest
+	k3d image import -c $(CLUSTER) meshtwin/chaos:test
+	$(MAKE) deploy VALUES="--set ingester.flushAge=15s"
+	sh deploy/chaos/chaos.sh
 
 lint:
 	$(HELM) lint $(CHART) $(CHART_FILES)

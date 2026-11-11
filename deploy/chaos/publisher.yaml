@@ -1,0 +1,45 @@
+# TEST DATA ONLY (make chaos). Publishes the SYNTHETIC capture
+# testdata/synthetic/sea-seed1-10m.ndjson (no real packets) to the bundled
+# mosquitto at QoS 1, each record to its own observer topic. Speed 0.5 stretches
+# the 10 min capture to ~20 min so traffic keeps flowing through every scenario.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chaos-publisher
+  namespace: meshtwin
+  labels: &labels
+    app.kubernetes.io/instance: meshtwin
+    app.kubernetes.io/component: chaos-publisher
+    meshtwin.io/test-data: "true"
+spec:
+  backoffLimit: 2 # a retry re-publishes from the start: duplicates, not loss
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: publisher
+          image: meshtwin/chaos:test
+          imagePullPolicy: IfNotPresent
+          command: [mqttreplay, -file, /chaos/sea-seed1-10m.ndjson,
+                    -url, "tcp://meshtwin-mosquitto:1883", -speed, "0.5", -qos, "1"]
+          env:
+            - name: MQTT_USERNAME
+              valueFrom: {secretKeyRef: {name: meshtwin-mqtt, key: username}}
+            - name: MQTT_PASSWORD
+              valueFrom: {secretKeyRef: {name: meshtwin-mqtt, key: password}}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}

@@ -8,9 +8,9 @@ bbox: "47.42,-122.40,47.79,-122.03"
 
 images:
   # Our images: built by `make images` and imported into k3d (no registry).
-  ingester: meshtwin/ingester:0.6.0
-  api: meshtwin/api:0.6.0
-  analytics: meshtwin/analytics:0.6.0
+  ingester: meshtwin/ingester:0.7.0
+  api: meshtwin/api:0.7.0
+  analytics: meshtwin/analytics:0.7.0
   # Third party: official images, pinned by tag and digest.
   seaweedfs: chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
   mosquitto: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
@@ -37,11 +37,19 @@ ingester:
     own-observer:
       # Empty = the bundled mosquitto below. Your own broker: tcp://host:1883 or ssl://host:8883
       url: ""
+      # Live is a few/s. With QoS 1 the cap throttles (backpressure), so the
+      # broker's queue after a restart drains at this rate instead of being dropped.
       maxPerSec: 50
     public-broker:
       url: wss://mqtt-us-v1.letsmesh.net:443/ # needs a subscribe-only account from the operator
       maxPerSec: 200
   flushAge: 5m
+  # DDIL spool: files that fail to upload to S3 wait here (fsync'd) and drain
+  # newest first when S3 is back; above maxBytes the oldest are evicted (lost).
+  spool:
+    size: 2Gi # PVC (RWO, single writer)
+    maxBytes: 1073741824 # 1 GiB: headroom under the PVC for the file being written
+    drainRateBytes: 0 # bytes/s back to S3 on a limited link; 0 = unlimited
   mqtt:
     username: observer
     # Password: --set ingester.mqtt.password=... or existingSecret (keys: username, password).
@@ -55,9 +63,13 @@ ingester:
 # publishes to host port 1883 (k3d maps it) with ingester.mqtt.username + the password.
 mosquitto:
   enabled: true # only deployed when ingester.source is own-observer
+  # Queued QoS 1 messages for the offline ingester survive a broker restart
+  # (saved every 60 s and on shutdown; a crash loses up to 60 s of queue).
+  storage: 64Mi
+  maxQueuedMessages: 10000 # ~20 min of a busy observer while the ingester is down
   resources:
     requests: {cpu: 10m, memory: 16Mi}
-    limits: {cpu: 200m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi} # room for a full queue (~1 KB each)
 
 api:
   replicas: 2 # stateless: reads summaries from S3

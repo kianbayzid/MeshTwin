@@ -13,7 +13,7 @@ metadata:
   labels: {{- include "meshtwin.labels" $c | nindent 4 }}
 spec:
   replicas: 1
-  strategy: {type: Recreate} # never two subscribers at once during a rollout
+  strategy: {type: Recreate} # never two subscribers (or spool writers: RWO) at once
   selector:
     matchLabels: {{- include "meshtwin.selector" $c | nindent 6 }}
   template:
@@ -22,7 +22,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {{- include "meshtwin.podSecurity" 65532 | nindent 8 }}
-      terminationGracePeriodSeconds: 45 # the ingester's final flush has a 30 s deadline
+      terminationGracePeriodSeconds: 45 # final flush (to S3 or the spool) has a 30 s deadline
       containers:
         - name: ingester
           image: {{ .Values.images.ingester }}
@@ -33,6 +33,22 @@ spec:
             - {name: MQTT_TOPIC, value: "meshcore/{{ .Values.region }}/+/packets"}
             - {name: MQTT_MAX_PER_SEC, value: {{ $src.maxPerSec | quote }}}
             - {name: FLUSH_AGE, value: {{ .Values.ingester.flushAge | quote }}}
+            - {name: SPOOL_DIR, value: /spool}
+            - {name: SPOOL_MAX_BYTES, value: {{ .Values.ingester.spool.maxBytes | int64 | quote }}}
+            - {name: DRAIN_RATE_BYTES, value: {{ .Values.ingester.spool.drainRateBytes | int64 | quote }}}
+            {{- if eq .Values.ingester.source "own-observer" }}
+            # Own broker: QoS 1 + persistent session, so the broker queues messages
+            # while the ingester restarts. The fixed client ID is the session key
+            # (Recreate guarantees only one pod uses it at a time).
+            - {name: MQTT_QOS, value: "1"}
+            - {name: MQTT_CLEAN_SESSION, value: "false"}
+            - {name: MQTT_CLIENT_ID, value: "{{ .Release.Name }}-ingester"}
+            {{- else }}
+            # Public broker: QoS 0, clean session. Asking a shared broker to queue
+            # for us while we are down isn't polite; we lose that window instead.
+            - {name: MQTT_QOS, value: "0"}
+            - {name: MQTT_CLEAN_SESSION, value: "true"}
+            {{- end }}
             {{- $mqttSecret := .Values.ingester.mqtt.existingSecret | default (printf "%s-mqtt" .Release.Name) }}
             - name: MQTT_USERNAME
               valueFrom: {secretKeyRef: {name: {{ $mqttSecret }}, key: username}}
@@ -41,13 +57,8 @@ spec:
             {{- include "meshtwin.s3Env" . | nindent 12 }}
           ports:
             - {name: http, containerPort: 8080}
-          # The HTTP server starts only once S3 answers (the ingester retries for 60 s),
-          # so give startup 2 min before liveness can restart it.
-          startupProbe:
-            httpGet: {path: /healthz, port: http}
-            periodSeconds: 5
-            failureThreshold: 24
-          # Liveness = process serving; readiness = broker connected and last flush OK.
+          # HTTP comes up first, without S3. Liveness = process serving;
+          # readiness = broker connected and (S3 up or spool writable).
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 20
@@ -56,6 +67,25 @@ spec:
             periodSeconds: 10
           resources: {{- toYaml .Values.ingester.resources | nindent 12 }}
           securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: spool, mountPath: /spool}
+      volumes:
+        - name: spool
+          persistentVolumeClaim: {claimName: {{ .Release.Name }}-ingester-spool}
+---
+# Survives pod restarts and rollouts: a new pod drains what the old one spooled.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-ingester-spool
+  labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep # uninstall must not delete unsent data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.ingester.spool.size }}
 ---
 apiVersion: v1
 kind: Service
@@ -81,7 +111,12 @@ data:
     listener 1883
     allow_anonymous false
     password_file /pw/pw
-    persistence false
+    persistence true
+    persistence_location /mosquitto/data/
+    autosave_interval 60
+    max_queued_messages {{ .Values.mosquitto.maxQueuedMessages | int64 }}
+    # Unacked QoS 1 in flight per client; must stay below the ingester's 1024-slot queue.
+    max_inflight_messages 20
     log_dest stdout
 ---
 apiVersion: apps/v1
@@ -91,11 +126,14 @@ metadata:
   labels: {{- include "meshtwin.labels" $m | nindent 4 }}
 spec:
   replicas: 1
+  strategy: {type: Recreate} # RWO persistence volume
   selector:
     matchLabels: {{- include "meshtwin.selector" $m | nindent 6 }}
   template:
     metadata:
       labels: {{- include "meshtwin.labels" $m | nindent 8 }}
+      annotations:
+        checksum/config: {{ .Values.mosquitto.maxQueuedMessages | toString | sha256sum | trunc 16 }}
     spec:
       automountServiceAccountToken: false
       securityContext: {{- include "meshtwin.podSecurity" 1883 | nindent 8 }}
@@ -130,11 +168,25 @@ spec:
           volumeMounts:
             - {name: pw, mountPath: /pw, readOnly: true}
             - {name: config, mountPath: /mosquitto/config, readOnly: true}
+            - {name: data, mountPath: /mosquitto/data}
       volumes:
         - name: pw
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
         - name: config
           configMap: {name: {{ .Release.Name }}-mosquitto}
+        - name: data
+          persistentVolumeClaim: {claimName: {{ .Release.Name }}-mosquitto-data}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-mosquitto-data
+  labels: {{- include "meshtwin.labels" $m | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.mosquitto.storage }}
 ---
 # NodePort so an observer on your LAN can publish (k3d maps host port 1883 here).
 apiVersion: v1

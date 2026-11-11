@@ -85,7 +85,9 @@ services:
              mosquitto_passwd -b -c /mosquitto/data/pw "$$OBSERVER_MQTT_USERNAME" "$$OBSERVER_MQTT_PASSWORD" &&
              chown mosquitto:mosquitto /mosquitto/data/pw && chmod 0600 /mosquitto/data/pw &&
              exec mosquitto -c /mosquitto/config/mosquitto.conf'
-    volumes: ["./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro"]
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data # persisted QoS 1 queue
     ports: ["1883:1883"] # LAN-reachable so your observer can publish; do NOT port-forward this
     restart: unless-stopped
 
@@ -93,6 +95,9 @@ services:
     <<: *ingester
     profiles: [own-observer]
     env_file: [own-observer.env]
+    volumes:
+      - ../../testdata/recorded/raw:/records
+      - ingester-spool:/spool # DDIL spool: survives container restarts
     environment:
       <<: *s3-env
       RECORD_FILE: ${RECORD_FILE:-}
@@ -126,3 +131,5 @@ services:
 
 volumes:
   seaweedfs-data:
+  mosquitto-data:
+  ingester-spool:

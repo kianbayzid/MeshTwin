@@ -99,6 +99,7 @@ spec:
                   - ingester
                   - api
                   - smoke-seed
+                  - chaos-check # TEST: deploy/chaos wipe + zero-loss count Jobs
                   {{- range $name, $_ := .Values.analytics.jobs }}
                   - analytics-{{ $name }}
                   {{- end }}

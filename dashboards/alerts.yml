@@ -43,3 +43,38 @@ groups:
         annotations:
           summary: "Ingester is not subscribed to the MQTT broker"
           description: "Check the broker URL and credentials Secret; the ingester retries with backoff."
+
+  # DDIL: S3 outages are buffered in the ingester's spool (PVC). These say
+  # whether the buffer is coping; only eviction means data is actually lost.
+  - name: meshtwin-ddil
+    rules:
+      - alert: MeshTwinStorageDown
+        expr: max(meshtwin_ingest_storage_up) == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Ingester cannot reach S3; new files are going to the spool"
+          description: "Nothing is lost yet. Check SeaweedFS (kubectl get pods) and the S3 Secret. Watch spool usage."
+
+      - alert: MeshTwinSpoolNearlyFull
+        expr: max(meshtwin_ingest_spool_bytes) > 0.8 * max(meshtwin_ingest_spool_max_bytes)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Spool is {{ $value | humanize1024 }}B, over 80% of SPOOL_MAX_BYTES"
+          description: "At 100% the oldest spooled files are evicted (lost). Restore S3 or raise ingester.spool.maxBytes and the PVC size."
+
+      - alert: MeshTwinSpoolEvicting
+        expr: sum(increase(meshtwin_ingest_spool_evicted_files_total[15m])) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Spool evicted {{ $value | humanize }} files in 15 min: data is being lost"
+          description: "The spool hit SPOOL_MAX_BYTES while S3 was unreachable, so the oldest data was dropped. Restore S3 first."
+
+      - alert: MeshTwinSpoolStale
+        expr: max(meshtwin_ingest_spool_oldest_age_seconds) > 3600
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Oldest spooled file is {{ $value | humanizeDuration }} old"
+          description: "Data older than 1 h is not in S3 yet, so analytics runs miss it. Check S3 and the drain rate (DRAIN_RATE_BYTES)."

@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -44,6 +45,11 @@ type config struct {
 	S3TLS                                          bool
 	LocalDir                                       string
 
+	SpoolDir       string
+	SpoolMaxBytes  int64
+	DrainRateBytes int64
+	MQTTQoS        int
+
 	FlushRows int
 	FlushAge  time.Duration
 	HTTPAddr  string
@@ -56,7 +62,7 @@ func env(k, def string) string {
 	return def
 }
 
-func envNum[T float64 | int | uint64](k string, def T) T {
+func envNum[T float64 | int | int64 | uint64](k string, def T) T {
 	v, ok := os.LookupEnv(k)
 	if !ok {
 		return def
@@ -85,6 +91,9 @@ func parseConfig() config {
 	flag.StringVar(&c.MQTT.Username, "mqtt-username", env("MQTT_USERNAME", ""), "broker username (password: env MQTT_PASSWORD)")
 	flag.StringVar(&c.MQTT.Topic, "mqtt-topic", env("MQTT_TOPIC", "meshcore/SEA/+/packets"), "region-filtered topic; never #")
 	flag.Float64Var(&c.MQTT.MaxPerSec, "mqtt-max-per-sec", envNum("MQTT_MAX_PER_SEC", 50.0), "drop messages above this rate (0 = no cap)")
+	flag.IntVar(&c.MQTTQoS, "mqtt-qos", envNum("MQTT_QOS", 0), "0 or 1; keep 0 on public community brokers (politeness), 1 with a persistent session on your own broker")
+	flag.StringVar(&c.MQTT.ClientID, "mqtt-client-id", env("MQTT_CLIENT_ID", ""), "stable client id, needed for a persistent session (default meshtwin-<random>)")
+	flag.BoolVar(&c.MQTT.CleanSession, "mqtt-clean-session", env("MQTT_CLEAN_SESSION", "true") == "true", "false + QoS 1 + a client id = the broker queues messages while we restart")
 	flag.StringVar(&c.ReplayFile, "replay-file", env("REPLAY_FILE", ""), "NDJSON capture for -mode replay")
 	flag.Float64Var(&c.Speed, "replay-speed", envNum("REPLAY_SPEED", 0.0), "1 = real time, 60 = 1h/min, 0 = as fast as possible")
 	flag.DurationVar(&c.SynthDur, "synth-duration", envDur("SYNTH_DURATION", time.Hour), "simulated time span for -mode synthetic")
@@ -96,13 +105,28 @@ func parseConfig() config {
 	flag.StringVar(&c.S3Bucket, "s3-bucket", env("S3_BUCKET", "meshtwin"), "bucket")
 	flag.BoolVar(&c.S3TLS, "s3-tls", env("S3_TLS", "false") == "true", "use HTTPS to S3")
 	flag.StringVar(&c.LocalDir, "local-dir", env("LOCAL_DIR", ""), "write Parquet under this directory instead of S3 (dev/fixtures)")
+	flag.StringVar(&c.SpoolDir, "spool-dir", env("SPOOL_DIR", ""), "disk buffer for files object storage did not accept (empty = no spool: rows wait in memory)")
+	flag.Int64Var(&c.SpoolMaxBytes, "spool-max-bytes", envNum("SPOOL_MAX_BYTES", int64(1<<30)), "spool cap; the oldest files are evicted beyond it")
+	flag.Int64Var(&c.DrainRateBytes, "drain-rate-bytes", envNum("DRAIN_RATE_BYTES", int64(0)), "spool upload limit in bytes/s for limited links (0 = unlimited)")
 	flag.IntVar(&c.FlushRows, "flush-rows", envNum("FLUSH_ROWS", 100_000), "write a partition's file at this many rows")
 	flag.DurationVar(&c.FlushAge, "flush-age", envDur("FLUSH_AGE", 5*time.Minute), "or when its oldest buffered row is this old")
 	flag.StringVar(&c.HTTPAddr, "http-addr", env("HTTP_ADDR", ":8080"), "metrics and health endpoints")
 	flag.Parse()
 	c.MQTT.Password = os.Getenv("MQTT_PASSWORD")
 	c.S3SecretKey = os.Getenv("S3_SECRET_KEY")
+	c.MQTT.QoS = byte(c.MQTTQoS)
 	return c
+}
+
+func (c config) validate() error {
+	if c.MQTTQoS != 0 && c.MQTTQoS != 1 {
+		return fmt.Errorf("-mqtt-qos must be 0 or 1, got %d", c.MQTTQoS)
+	}
+	// A random id would leave an orphaned session queueing on the broker after every restart.
+	if !c.MQTT.CleanSession && c.MQTT.ClientID == "" {
+		return errors.New("-mqtt-clean-session=false needs a stable -mqtt-client-id")
+	}
+	return nil
 }
 
 func main() {
@@ -118,19 +142,34 @@ func run(c config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := c.validate(); err != nil {
+		return err
+	}
 	src, err := pickSource(c)
 	if err != nil {
 		return err
 	}
-	store, err := openStore(ctx, c)
+	store, err := openStore(c)
 	if err != nil {
 		return err
 	}
+	var spool *ingest.Spool
+	if c.SpoolDir != "" {
+		if spool, err = ingest.OpenSpool(store, c.SpoolDir, c.SpoolMaxBytes, c.DrainRateBytes); err != nil {
+			return err
+		}
+		store = spool
+		slog.Info("spooling to disk while object storage is down", "dir", c.SpoolDir, "max_bytes", c.SpoolMaxBytes, "drain_rate_bytes", c.DrainRateBytes)
+		go spool.Drain(ctx)
+	}
 	w := &ingest.Writer{Store: store, FlushRows: c.FlushRows, FlushAge: c.FlushAge, Now: time.Now}
 
+	// Nothing above touches the network, so probes answer from the first second.
 	var mqttUp, flushOK atomic.Bool
 	flushOK.Store(true)
-	srv := &http.Server{Addr: c.HTTPAddr, Handler: httpHandler(c.Mode, &mqttUp, &flushOK), ReadHeaderTimeout: 5 * time.Second}
+	storageUp := storageUpFunc(spool, &flushOK)
+	registerStorageMetrics(spool, storageUp)
+	srv := &http.Server{Addr: c.HTTPAddr, Handler: httpHandler(c.Mode, &mqttUp, &flushOK, storageUp), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("http server", "err", err)
@@ -154,9 +193,24 @@ func run(c config) error {
 	// (backpressure) instead of memory growing without limit.
 	records := make(chan replay.Record, 10_000)
 	srcErr := make(chan error, 1)
+	// recMu makes "no send after close" hold even if a source goroutine
+	// outlives src(): emit holds the read lock across its send, close takes
+	// the write lock. Emits blocked on a full channel leave via ctx.Done.
+	var recMu sync.RWMutex
+	recClosed := false
 	go func() {
-		defer close(records)
+		defer func() {
+			recMu.Lock()
+			recClosed = true
+			close(records)
+			recMu.Unlock()
+		}()
 		srcErr <- src(ctx, func(r replay.Record) error {
+			recMu.RLock()
+			defer recMu.RUnlock()
+			if recClosed {
+				return errors.New("ingester stopping")
+			}
 			select {
 			case records <- r:
 				return nil
@@ -176,7 +230,7 @@ func run(c config) error {
 		flushOK.Store(err == nil)
 		if err != nil {
 			flushErrors.Inc()
-			slog.Error("flush failed; rows stay buffered and will be retried", "err", err)
+			slog.Error("flush failed (storage and spool); rows stay buffered and will be retried", "err", err)
 		}
 		buffered.Set(float64(w.Buffered()))
 	}
@@ -216,27 +270,18 @@ func run(c config) error {
 }
 
 // openStore picks the local directory store when -local-dir is set, else S3.
-func openStore(ctx context.Context, c config) (ingest.Store, error) {
+// Neither touches the network: storage that starts after us (compose,
+// Kubernetes) is just an outage that the spool or the flush retry rides out.
+func openStore(c config) (ingest.Store, error) {
 	if c.LocalDir != "" {
 		slog.Info("writing Parquet to local directory", "dir", c.LocalDir)
 		return ingest.LocalStore{Root: c.LocalDir}, nil
 	}
-	// Storage often starts after us (compose, Kubernetes): retry for a minute
-	// before giving up, instead of depending on startup order.
-	for attempt := 1; ; attempt++ {
-		s3, err := ingest.NewS3Store(ctx, c.S3Endpoint, c.S3AccessKey, c.S3SecretKey, c.S3Bucket, c.S3TLS)
-		if err == nil {
-			return s3, nil
-		}
-		if attempt == 12 || ctx.Err() != nil {
-			return nil, fmt.Errorf("object storage: %w", err)
-		}
-		slog.Warn("object storage not reachable yet, retrying", "endpoint", c.S3Endpoint, "err", err)
-		select {
-		case <-time.After(5 * time.Second):
-		case <-ctx.Done():
-		}
+	s3, err := ingest.NewS3Store(c.S3Endpoint, c.S3AccessKey, c.S3SecretKey, c.S3Bucket, c.S3TLS)
+	if err != nil {
+		return nil, fmt.Errorf("object storage: %w", err)
 	}
+	return s3, nil
 }
 
 func handle(w *ingest.Writer, r replay.Record) {

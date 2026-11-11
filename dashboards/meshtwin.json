@@ -6,7 +6,7 @@
   ],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "30s",
   "time": {
@@ -244,12 +244,249 @@
     },
     {
       "type": "row",
+      "id": 14,
+      "title": "DDIL (S3 outage buffering)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "stat",
+      "id": 15,
+      "title": "Storage up",
+      "description": "0 = S3 unreachable, new files go to the spool.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 4,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(meshtwin_ingest_storage_up)",
+          "legendFormat": "S3 up"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 16,
+      "title": "Spool size",
+      "description": "Bytes waiting to upload, against SPOOL_MAX_BYTES (oldest evicted above it).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(meshtwin_ingest_spool_bytes)",
+          "legendFormat": "spool"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(meshtwin_ingest_spool_max_bytes)",
+          "legendFormat": "max"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 17,
+      "title": "Spool files",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(meshtwin_ingest_spool_files)",
+          "legendFormat": "files"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 18,
+      "title": "Oldest spooled",
+      "description": "Age of the oldest file not yet in S3 (alert above 1 h).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(meshtwin_ingest_spool_oldest_age_seconds)",
+          "legendFormat": "oldest"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 19,
+      "title": "Spool writes vs uploads",
+      "description": "Writes = failed S3 uploads parked on disk; uploads = drained back to S3.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(meshtwin_ingest_spool_writes_total[5m])) * 60",
+          "legendFormat": "writes / min"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(meshtwin_ingest_spool_uploads_total[5m])) * 60",
+          "legendFormat": "uploads / min"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 20,
+      "title": "Evicted (data lost)",
+      "description": "Any value above 0 is lost data: the spool was full.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(meshtwin_ingest_spool_evicted_files_total[15m]))",
+          "legendFormat": "files / 15 min"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(meshtwin_ingest_spool_evicted_bytes_total[15m]))",
+          "legendFormat": "bytes / 15 min"
+        }
+      ]
+    },
+    {
+      "type": "row",
       "id": 8,
       "title": "API",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 34,
         "w": 24,
         "h": 1
       }
@@ -265,7 +502,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 35,
         "w": 8,
         "h": 8
       },
@@ -298,7 +535,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 18,
+        "y": 35,
         "w": 8,
         "h": 8
       },
@@ -331,7 +568,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 18,
+        "y": 35,
         "w": 8,
         "h": 8
       },
@@ -364,7 +601,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 43,
         "w": 8,
         "h": 8
       },
@@ -397,7 +634,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 26,
+        "y": 43,
         "w": 16,
         "h": 8
       },

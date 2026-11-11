@@ -134,3 +134,29 @@ k3d 5.9.0 (k3s v1.35.5, one server node) on Docker Desktop 29.2.1 / WSL2, same l
 - Job peaks are cgroup `memory.peak`: `kubectl top` samples too slowly for jobs this short. Limits in `values.yaml` are set from these.
 - The analytics image is big because of pyarrow + imagecodecs. Fine for a CronJob that pulls once per node; a slimmer
   build (drop imagecodecs codecs we don't use) is a later option.
+
+## Phase 7: DDIL buffering + chaos demo (2026-11-10)
+
+Spool micro-benchmarks (`go test -run=^$ -bench=Spool -benchtime=64x ./internal/ingest`, 1 MiB files):
+
+| | Linux container | Windows native |
+|---|---:|---:|
+| Spool write (fsync file + directory) | 338 MB/s (3.1 ms/file) | 285 MB/s |
+| Drain to an in-memory store (read, upload, delete) | 1,385 MB/s | 918 MB/s |
+
+Real drains are bounded by the network or `DRAIN_RATE_BYTES`, not the disk.
+
+`make chaos` on k3d (synthetic **test** capture `sea-seed1-10m.ndjson` published over MQTT QoS 1 at 0.5× speed; `FLUSH_AGE=15s`):
+
+| scenario | result |
+|---|---|
+| a. storage down 180 s | spool peak 88.9 KB / 12 files, oldest 163 s; ingester Ready throughout; drained 25 s after restore (incl. SeaweedFS start) |
+| b. flapping, 3 × 20 s down / 20 s up | peaks 8.5–16.5 KB; drained to 0 inside every 20 s up-window |
+| c. ingester pod deleted mid-outage | new pod Ready in 6 s with S3 still down, inherited the spool from its PVC; broker queue gap ~0.7 s (persistent session resumed) |
+| d. drain capped at 1,024 B/s | 43.7 KB spooled; drain took ~53 s after storage was back (≥ 42 s expected at the cap) |
+| **Zero-loss check** | **4,337 expected, 4,337 distinct in S3, 0 missing, 0 duplicates, 0 unexpected** |
+
+- 0 ingester restarts, 0 evictions; `MeshTwinStorageDown` went pending (never fired: both outages < its 5 min `for:`).
+- Script runtime 22 m 39 s (~11 m of scenarios, the rest waiting for the publisher to finish).
+- Read-side dedup by `reception_id` (at-least-once delivery): topology command 1.523 s → 1.562 s (+2.6 %) on `sea-seed1-2h-hash1`.
+- Not exercised: SIGKILL (rows in memory are lost), QoS 0 public broker (messages lost while the ingester is down), mosquitto restart (queue persistence configured, untested).

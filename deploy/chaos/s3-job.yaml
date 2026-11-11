@@ -1,0 +1,78 @@
+# TEST ONLY (make chaos). One Job against the bucket, run twice by chaos.sh:
+#   CHAOS_STEP=wipe   delete s3://meshtwin/receptions/ before the run
+#   CHAOS_STEP=count  zero-loss check: distinct reception_id in S3 vs /chaos/expected
+# chaos.sh substitutes CHAOS_STEP. Label component=chaos-check is on the SeaweedFS
+# NetworkPolicy allow-list.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chaos-CHAOS_STEP
+  namespace: meshtwin
+  labels: &labels
+    app.kubernetes.io/instance: meshtwin
+    app.kubernetes.io/component: chaos-check
+    meshtwin.io/test-data: "true"
+spec:
+  backoffLimit: 0 # a failed count is the answer, not something to retry
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: check
+          image: meshtwin/chaos:test
+          imagePullPolicy: IfNotPresent
+          command: [python, -c]
+          args:
+            - |
+              import sys
+              from meshtwin_analytics.storage import S3Config, connect, table_glob
+              bucket = "meshtwin"
+              if "CHAOS_STEP" == "wipe":
+                  S3Config.from_env().arrow_filesystem().delete_dir_contents(
+                      f"{bucket}/receptions", missing_dir_ok=True)
+                  print(f"wiped s3://{bucket}/receptions/")
+                  sys.exit(0)
+              con = connect(f"s3://{bucket}")
+              con.execute("CREATE TABLE e AS SELECT DISTINCT reception_id FROM read_parquet("
+                          f"'{table_glob('/chaos/expected', 'receptions')}')")
+              con.execute("CREATE TABLE a AS SELECT reception_id FROM read_parquet("
+                          f"'{table_glob(f's3://{bucket}', 'receptions')}')")
+              q = lambda sql: con.execute(sql).fetchone()[0]
+              expected = q("SELECT count(*) FROM e")
+              rows = q("SELECT count(*) FROM a")
+              actual = q("SELECT count(DISTINCT reception_id) FROM a")
+              missing = q("SELECT count(*) FROM e ANTI JOIN a USING (reception_id)")
+              unexpected = q("SELECT count(DISTINCT reception_id) FROM a ANTI JOIN e USING (reception_id)")
+              print(f"expected={expected} actual={actual} missing={missing} "
+                    f"unexpected={unexpected} rows={rows} duplicates={rows - actual}")
+              ok = actual == expected and missing == 0
+              print("ZERO-LOSS PASS" if ok else "ZERO-LOSS FAIL")
+              sys.exit(0 if ok else 1)
+          env:
+            - {name: S3_ENDPOINT, value: "meshtwin-seaweedfs:8333"}
+            - {name: S3_TLS, value: "false"}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: meshtwin-s3, key: access-key}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: meshtwin-s3, key: secret-key}}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}

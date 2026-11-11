@@ -88,3 +88,13 @@
 - Verifier rounds: platform FAIL once (compose mosquitto not digest-pinned; no empty-secret guard on SeaweedFS in the chart), analytics FAIL once (Windows rename race in `fetch_glo30`, caught by its own new test). Both fixed; hardening added: SeaweedFS NetworkPolicy, kube API on 127.0.0.1.
 - API readiness probe hits `/api/v1/regions`, which keeps the freshness gauge current without user traffic.
 - Follow-ups: ingester starts its HTTP server only after S3 answers (startupProbe + one cold-start restart; go lane); Prometheus on emptyDir; our images have tags, not digests, until there's a registry (Phase 8); OSM tiles for a public deploy.
+
+## Phase 7: done (2026-11-10), pending the user's review
+- Goal: no data loss across storage outages, flapping links and ingester restarts; bounded memory and disk; drain throttled on limited links.
+- go-engineer: disk spool behind the Store interface (fsync, content-addressed keys, so re-uploads are idempotent), newest-first drain with a rate limit, oldest-first eviction at a cap, start without S3, MQTT QoS 1 + persistent session option, `cmd/mqttreplay` test publisher, spool metrics.
+- platform-engineer: spool PVC, Recreate strategy, QoS 1 for own-observer only (public brokers stay QoS 0), DDIL dashboard row + alerts, `make chaos` (storage outage, flapping, ingester killed mid-outage, limited link) ending in a zero-loss check by distinct `reception_id`.
+- Known gap by design: SIGKILL loses rows still in memory; QoS 0 loses messages while the ingester is down.
+- Verifier rounds: Go 4 (storage never retried when the spool write failed; QoS 1 backlog dropped by the rate cap; out-of-order PUBACKs, unbounded goroutines and a send-on-closed-channel panic; then comments), analytics 1, platform 1. Final design: one MQTT worker acks in arrival order, QoS 1 throttles instead of dropping.
+- Added read-side dedup by `reception_id` in analytics: delivery is at-least-once.
+- `make chaos`: 4 scenarios, zero loss (4,337/4,337, 0 duplicates). Numbers in benchmarks.md.
+- Follow-ups: scenario d's assertion is too loose to catch a missing rate cap (behaviour shown, check weak); `expected > 0` guard in the zero-loss Job; mosquitto config checksum hashes only one value; duplicated comment in own-observer.env; ingester startup log wording ("spooling to disk while object storage is down" printed with S3 up); mosquitto restart untested; cluster left on `flushAge=15s` until `make deploy`.

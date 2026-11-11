@@ -60,12 +60,23 @@ def _window_sql() -> str:
     return f"region = ? AND rx_time >= {ts} AND rx_time < {ts}"
 
 
+def _receptions(root: str) -> str:
+    """Receptions in the window, one row per reception_id. At-least-once delivery (MQTT QoS 1
+    redelivery, spool re-uploads) can put the same reception in two files (schema.md). The window
+    predicate stays inside the subquery so Parquet statistics still prune row groups. Keep the
+    earliest copy: rx_time can be ingester receive time, which differs between redeliveries.
+    shortcut: copies straddling the window edge count once per window, upgrade if windows overlap.
+    Params: region, frm, to."""
+    return f"""(SELECT * FROM {_src(root, "receptions")} WHERE {_window_sql()}
+              QUALIFY row_number() OVER (PARTITION BY reception_id ORDER BY rx_time) = 1)"""
+
+
 def counts(con: duckdb.DuckDBPyConnection, root: str, region: str, frm: int, to: int) -> Counts:
     row = con.execute(
         f"""SELECT count(*),
                    count(*) FILTER (WHERE route_type IN {FLOOD_ROUTES}),
                    count(DISTINCT observer_id)
-            FROM {_src(root, "receptions")} WHERE {_window_sql()}""",
+            FROM {_receptions(root)}""",
         [region, frm, to],
     ).fetchone()
     assert row is not None
@@ -80,9 +91,8 @@ def flood_receptions(
         f"""SELECT epoch_us(rx_time), observer_id, path_hops,
                    CASE WHEN length(src_id) = 64 THEN upper(src_id) END,
                    snr_db, rssi_dbm
-            FROM {_src(root, "receptions")}
-            WHERE {_window_sql()}
-              AND route_type IN {FLOOD_ROUTES} AND payload_type <> {TRACE_PAYLOAD}
+            FROM {_receptions(root)}
+            WHERE route_type IN {FLOOD_ROUTES} AND payload_type <> {TRACE_PAYLOAD}
             ORDER BY rx_time""",
         [region, frm, to],
     ).fetchall()
