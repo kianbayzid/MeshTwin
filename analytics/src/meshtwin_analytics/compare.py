@@ -165,6 +165,26 @@ def profiles_json(
     return {"meta": meta(run, SOURCE), "model": model, "params": params, "profiles": rows}
 
 
+PROFILE_SHARDS = "0123456789ABCDEF"
+
+
+def profile_shard(a: str, b: str) -> str:
+    """Shard of a pair: first character of the smaller upper-cased id (docs/api-contract.md)."""
+    s = min(a.upper(), b.upper())[0]
+    if s not in PROFILE_SHARDS:
+        raise ValueError(f"id pair {a!r}/{b!r} is not hex: no profile shard")
+    return s
+
+
+def shard_profiles(doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """profiles_json output -> {"profiles/<s>": same doc with only that shard's profiles},
+    all 16 shards, order within each shard kept."""
+    shards: dict[str, list[dict[str, Any]]] = {s: [] for s in PROFILE_SHARDS}
+    for p in doc["profiles"]:
+        shards[profile_shard(p["a"], p["b"])].append(p)
+    return {f"profiles/{s}": doc | {"profiles": rows} for s, rows in shards.items()}
+
+
 def _link(run: TopologyRun, a: str, b: str, p: LinkPrediction) -> dict[str, Any]:
     return {
         "a": public_id(a),

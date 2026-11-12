@@ -107,13 +107,26 @@ def pairs_lost(g: "nx.Graph[str]", node: str) -> int:
     return existing_pairs(reach) - len(reach[node] - {CANDIDATE}) - existing_pairs(reach_sets(h))
 
 
-def network_gain(g: "nx.Graph[str]", links: list[tuple[str, float]]) -> tuple[int, int]:
-    """(reachable pairs gained, nodes newly in the largest relay group) from one candidate."""
+def base_state(g: "nx.Graph[str]") -> tuple[int, set[str]]:
+    """The graph's own reachable pairs and largest relay group: the same for every candidate."""
+    return existing_pairs(reach_sets(g)), main_group(g)
+
+
+def network_gain(
+    g: "nx.Graph[str]",
+    links: list[tuple[str, float]],
+    base: tuple[int, set[str]] | None = None,
+) -> tuple[int, int]:
+    """(reachable pairs gained, nodes newly in the largest relay group) from one candidate.
+
+    base: base_state(g), passed in by callers scoring many candidates on the same graph.
+    """
     if not links:
         return 0, 0
+    base_pairs, base_main = base_state(g) if base is None else base
     h = with_candidate(g, links)
-    gained = existing_pairs(reach_sets(h)) - existing_pairs(reach_sets(g))
-    joined = (main_group(h) - {CANDIDATE}) - main_group(g)
+    gained = existing_pairs(reach_sets(h)) - base_pairs
+    joined = (main_group(h) - {CANDIDATE}) - base_main
     return gained, len(joined)
 
 
@@ -142,9 +155,10 @@ def recommend(
     `sites` holds the located graph nodes; `spofs` the current single points of failure.
     """
     scored = []
+    base = base_state(g)
     for cell in cells:
         links = predict_links(cell, sites, model, radio)
-        gained, joined = network_gain(g, links)
+        gained, joined = network_gain(g, links, base)
         scored.append(Candidate(cell[0], cell[1], links, gained, joined, []))
 
     # shortcut: only the top K by pairs gained get the (costly) SPOF re-check, so a cell

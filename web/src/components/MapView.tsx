@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { TOP_CANDIDATES, type Summaries } from '../api/client';
 import { bounds, linksGeo, nodesGeo, placementGeo, predictedOnlyGeo, type Filters } from '../map/geojson';
 import { addIcons } from '../map/icons';
+import { nearest } from '../map/pick';
 import type { BaseStyle } from '../map/style';
 import { palette } from '../palette';
 import type { Layers, Selection, View } from '../state';
@@ -54,7 +55,8 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
       maxPitch: 75,
     });
     mapRef.current = map;
-    if (import.meta.env.DEV) (window as unknown as { __map: MlMap }).__map = map; // for Playwright checks
+    // Test hook for Playwright: dev server, or a build made with VITE_E2E=1. Production builds drop this line.
+    if (import.meta.env.DEV || import.meta.env.VITE_E2E === '1') (window as unknown as { __map: MlMap }).__map = map;
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
 
     let removed = false;
@@ -84,8 +86,6 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
       map.addLayer({ id: 'links-selected-glow', type: 'line', source: 'links', filter: ['==', ['get', 'key'], ''],
         paint: { 'line-color': palette.ink, 'line-width': 10, 'line-blur': 8, 'line-opacity': 0.35 } });
 
-      map.addLayer({ id: 'spof-pulse', type: 'circle', source: 'nodes', filter: ['get', 'spof'],
-        paint: { 'circle-radius': 14, 'circle-color': 'transparent', 'circle-stroke-color': palette.amber, 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.5 } });
       map.addLayer({ id: 'spof-ring', type: 'circle', source: 'nodes', filter: ['get', 'spof'],
         paint: { 'circle-radius': 10, 'circle-color': 'transparent', 'circle-stroke-color': palette.amber, 'circle-stroke-width': 2 } });
       map.addLayer({ id: 'node-selected', type: 'circle', source: 'nodes', filter: ['==', ['get', 'id'], ''],
@@ -103,7 +103,9 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
       map.on('click', (e) => {
         const hit = map.queryRenderedFeatures(e.point, { layers: ['nodes', 'links-hit'] });
         const node = hit.find((f) => f.layer.id === 'nodes');
-        const link = hit.find((f) => f.layer.id === 'links-hit');
+        // Click areas are 12 px wide, so in dense clusters several overlap: take the line nearest the cursor,
+        // not the topmost one, or some short links can't be selected at all.
+        const link = nearest(map, e.point, hit.filter((f) => f.layer.id === 'links-hit'));
         if (node) onSelectRef.current({ kind: 'node', id: String(node.properties.id) });
         else if (link) {
           const [a, b] = String(link.properties.key).split('|') as [string, string];
@@ -114,20 +116,7 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
       map.fire('meshtwin:ready');
     });
 
-    // Slow amber pulse for single points of failure; static ring when the user prefers reduced motion.
-    let raf = 0;
-    const pulse = (t: number) => {
-      if (ready.current && !reducedMotion() && map.getLayoutProperty('spof-pulse', 'visibility') !== 'none') {
-        const k = (t % 2400) / 2400;
-        map.setPaintProperty('spof-pulse', 'circle-radius', 10 + 14 * k);
-        map.setPaintProperty('spof-pulse', 'circle-stroke-opacity', 0.7 * (1 - k));
-      }
-      raf = requestAnimationFrame(pulse);
-    };
-    raf = requestAnimationFrame(pulse);
-
     return () => {
-      cancelAnimationFrame(raf);
       removed = true;
       ready.current = false;
       map.remove();
@@ -135,17 +124,46 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
     // Map is created once; data/filters/layers are applied by the effects below.
   }, []);
 
-  // Apply state to the map once it's loaded, and again whenever it changes.
-  const whenReady = (fn: (m: MlMap) => void) => {
+  // Apply state to the map once it's loaded, and again whenever it changes. Returns a cleanup that cancels a
+  // still-pending call, so an effect that re-runs (or unmounts) before the map is ready never applies stale state.
+  const whenReady = (fn: (m: MlMap) => void): (() => void) => {
     const m = mapRef.current;
-    if (!m) return;
-    if (ready.current) fn(m);
-    else m.once('meshtwin:ready', () => fn(m));
+    if (!m) return () => undefined;
+    if (ready.current) {
+      fn(m);
+      return () => undefined;
+    }
+    const pending = () => fn(m);
+    m.once('meshtwin:ready', pending);
+    return () => m.off('meshtwin:ready', pending);
   };
 
   useEffect(() => whenReady((m) => {
     (m.getSource('links') as GeoJSONSource).setData(linksGeo(data.topology, data.residuals, filters));
   }), [data, filters]);
+
+  // Slow amber pulse for single points of failure. DOM markers animated by CSS (compositor-only), not a map layer:
+  // repainting a paint property every frame kept the 3D map rendering ~45 times a second while idle.
+  // The pulse stops under prefers-reduced-motion (styles.css); the static amber ring is the map layer 'spof-ring'.
+  useEffect(() => {
+    const markers: maplibregl.Marker[] = [];
+    const cancel = whenReady((m) => {
+      if (!layers.spofs) return;
+      for (const f of nodesGeo(data.topology, data.resilience).features) {
+        if (!f.properties?.spof) continue;
+        const el = document.createElement('div');
+        el.className = 'spof-pulse';
+        el.setAttribute('aria-hidden', 'true');
+        el.appendChild(document.createElement('span'));
+        markers.push(new maplibregl.Marker({ element: el, pitchAlignment: 'viewport', rotationAlignment: 'viewport' })
+          .setLngLat(f.geometry.coordinates as [number, number]).addTo(m));
+      }
+    });
+    return () => {
+      cancel();
+      markers.forEach((x) => x.remove());
+    };
+  }, [data, layers.spofs]);
 
   useEffect(() => whenReady((m) => {
     (m.getSource('nodes') as GeoJSONSource).setData(nodesGeo(data.topology, data.resilience));
@@ -157,7 +175,7 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
     const vis = (id: string, on: boolean) => m.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
     for (const id of ['links', 'links-uncertain', 'links-hit', 'links-selected', 'links-selected-glow']) vis(id, layers.links);
     for (const id of ['nodes', 'node-selected']) vis(id, layers.nodes);
-    for (const id of ['spof-pulse', 'spof-ring']) vis(id, layers.spofs);
+    vis('spof-ring', layers.spofs);
     vis('placement', layers.placement);
     vis('predicted', layers.predicted);
     const color = layers.linkColor === 'residual' ? residualColor : snrColor;

@@ -27,7 +27,7 @@ func contractExamples(t *testing.T) map[string]map[string]any {
 	marker := map[string]string{
 		"regions": "regions", "stats": "topology", "baseline": "resilience", "summary": "residuals",
 		"observed_but_predicted_impossible": "surprising", "params": "profiles", "candidates": "placement",
-		"encoding": "terrain",
+		"encoding": "terrain", "ingest": "status",
 	}
 	out := map[string]map[string]any{}
 	for _, m := range regexp.MustCompile("(?s)```json\r?\n(.*?)```").FindAllStringSubmatch(string(doc), -1) {
@@ -50,8 +50,8 @@ func contractExamples(t *testing.T) map[string]map[string]any {
 // keyPaths lists every object key path in v ("links[].snr_db.median");
 // arrays contribute the union of their elements' keys.
 // storedForm is the file a job writes for name. Every example is that file,
-// except profiles: the example is one route response, and profiles.json holds
-// its entries in a list.
+// except profiles: the example is one route response, and a profiles shard
+// holds its entries in a list.
 func storedForm(ex map[string]map[string]any, name string) map[string]any {
 	p := ex[name]
 	if name != "profiles" {
@@ -92,6 +92,23 @@ func TestContractExamples(t *testing.T) {
 	ex := contractExamples(t)
 	root := t.TempDir()
 	for _, name := range store.Names {
+		if name == "profiles" {
+			// One shard per character, each holding only its own pairs (most are empty).
+			for i := range len(store.ProfileShards) {
+				doc := storedForm(ex, name)
+				mine := []any{} // [] rather than null when empty
+				for _, p := range doc["profiles"].([]any) {
+					o := p.(map[string]any)
+					if pairKey(o["a"].(string), o["b"].(string))[0][0] == store.ProfileShards[i] {
+						mine = append(mine, p)
+					}
+				}
+				doc["profiles"] = mine
+				b, _ := json.Marshal(doc)
+				writeSummary(t, root, "SEA", store.ProfileShard(store.ProfileShards[i]), string(b))
+			}
+			continue
+		}
 		b, _ := json.Marshal(storedForm(ex, name))
 		writeSummary(t, root, "SEA", name, string(b))
 	}
@@ -114,6 +131,9 @@ func TestContractExamples(t *testing.T) {
 	}
 	rec := get(t, h, "/api/v1/regions")
 	sameKeys(t, "regions", ex["regions"], decode(t, rec))
+	if !strings.Contains(rec.Body.String(), `"profiles"`) {
+		t.Errorf("regions: want profiles listed (all 16 shards valid): %s", rec.Body)
+	}
 }
 
 // TestRealAnalyticsOutput serves summaries the analytics CLI actually wrote

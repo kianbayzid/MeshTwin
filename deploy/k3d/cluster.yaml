@@ -10,7 +10,7 @@ kubeAPI:
   hostIP: "127.0.0.1" # the API server on localhost only, not 0.0.0.0
 image: rancher/k3s:v1.35.5-k3s1@sha256:2074403abe1bded11ef3dde09d457e13be8e0b64c218b1c4f8269b4565cfbc65
 ports:
-  # Host -> NodePort. API + map and Grafana on localhost only.
+  # Host -> NodePort. API + web console and Grafana on localhost only.
   - port: 127.0.0.1:8090:30080
     nodeFilters: [server:0]
   - port: 127.0.0.1:3030:30300

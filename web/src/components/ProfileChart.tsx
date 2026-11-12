@@ -1,11 +1,12 @@
 import { useState, type KeyboardEvent, type MouseEvent } from 'react';
-import type { Profile } from '../api/types';
+import type { Profile, ProfileResponse } from '../api/types';
 import { extent, samples, worst, type Sample } from '../profile';
 
 interface Props {
   profile: Profile;
   nameA: string;
   nameB: string;
+  params: ProfileResponse['params'];
 }
 
 const W = 332;
@@ -27,7 +28,7 @@ function runs(s: Sample[], state: Sample['state']): number[][] {
   return out;
 }
 
-export function ProfileChart({ profile, nameA, nameB }: Props) {
+export function ProfileChart({ profile, nameA, nameB, params }: Props) {
   const s = samples(profile);
   const [lo, hi] = extent(s);
   const d = Math.max(profile.distance_km, 1e-6);
@@ -113,6 +114,7 @@ export function ProfileChart({ profile, nameA, nameB }: Props) {
       </ul>
       <figcaption>
         {summary} Path between the two ~1 km grid cells; the model's numbers below use the exact positions.
+        Fresnel zone at {params.freq_mhz} MHz, Earth curvature with k = {params.k_factor}.
       </figcaption>
     </figure>
   );

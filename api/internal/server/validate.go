@@ -45,11 +45,15 @@ import (
 //     (named public infrastructure) may have a non-null name;
 //   - meta.schema_version is 1 and meta.region matches the requested region;
 //   - meta.window is an object, except for terrain, where it is null;
-//   - terrain: see checkTerrain; profiles: see checkProfiles.
+//   - terrain: see checkTerrain; profiles (shards): see checkProfiles.
 //
 // Duplicate keys are not rejected: the decoder keeps the last one, that is the
 // value checked, and it is the only one re-encoded and served.
+//
+// name may be a profiles shard ("profiles/0"): it is checked as profiles, and
+// every pair must belong to that shard.
 func validate(region, name string, data []byte) ([]byte, error) {
+	name, shard, _ := strings.Cut(name, "/")
 	paths, ok := allowed[name]
 	if !ok {
 		return nil, fmt.Errorf("no allow-list for summary %q", name)
@@ -86,7 +90,7 @@ func validate(region, name string, data []byte) ([]byte, error) {
 		return nil, errors.New("meta.window is missing or null (only terrain has no window)")
 	}
 	if name == "profiles" {
-		if err := checkProfiles(doc); err != nil {
+		if err := checkProfiles(doc, shard); err != nil {
 			return nil, err
 		}
 	}
@@ -283,11 +287,11 @@ func checkTerrain(doc map[string]any) error {
 	return nil
 }
 
-// checkProfiles checks profiles.json beyond its shape. The allow-list already
+// checkProfiles checks a profiles shard beyond its shape. The allow-list already
 // rejects any lat/lon key; these checks make every value the chart draws
-// present, finite and bounded, and each pair appear once, so the route's
-// lookup by pair is unambiguous.
-func checkProfiles(doc map[string]any) error {
+// present, finite and bounded, each pair appear once, and (when shard is set)
+// in its own shard, so the route's lookup by pair is unambiguous.
+func checkProfiles(doc map[string]any, shard string) error {
 	p, _ := doc["params"].(map[string]any)
 	if f := number(p["freq_mhz"]); !(f >= 100 && f <= 6000) { // !(...) also rejects NaN and a missing value
 		return fmt.Errorf("params.freq_mhz = %v, want 100-6000", p["freq_mhz"])
@@ -309,6 +313,9 @@ func checkProfiles(doc map[string]any) error {
 			return fmt.Errorf("profiles[%d]: %w", i, err)
 		}
 		key := pairKey(o["a"].(string), o["b"].(string)) // checkProfile made both strings
+		if shard != "" && key[0][:1] != shard {
+			return fmt.Errorf("profiles[%d]: pair %s-%s belongs in shard %s, not %s", i, key[0], key[1], key[0][:1], shard)
+		}
 		if seen[key] {
 			return fmt.Errorf("profiles[%d]: duplicate pair %s-%s", i, key[0], key[1])
 		}

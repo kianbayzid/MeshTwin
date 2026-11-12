@@ -4,7 +4,7 @@
 #   docker compose --profile public-broker up --build   # community broker (needs a read account)
 #   docker compose --profile replay        up --build   # replay a capture file, then exit
 #
-# Always started: seaweedfs (S3 on 127.0.0.1:8333) and the api (map + REST on 127.0.0.1:8081).
+# Always started: seaweedfs (S3 on 127.0.0.1:8333) and the api (web console + REST on 127.0.0.1:8081).
 # Secrets come from ./.env (copy .env.example; .env is git-ignored).
 # Record raw traffic for the test capture: RECORD_FILE=/records/sea.ndjson docker compose ...
 name: meshtwin
@@ -56,9 +56,12 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # Read-only REST API + Leaflet map over the analytics summaries in S3.
+  # Read-only REST API + the web console (web/, built into the image) over the
+  # analytics summaries in S3.
   api:
-    build: ../../api
+    build:
+      context: ../../api
+      additional_contexts: {web: ../../web} # console sources (api/Dockerfile)
     image: meshtwin/api:dev
     depends_on:
       seaweedfs: {condition: service_healthy}

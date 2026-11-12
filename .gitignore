@@ -19,3 +19,6 @@ testdata/recorded/raw/
 /.playwright-mcp/
 /web/public/basemap/
 /web/*.tsbuildinfo
+/web/dist-e2e/
+/web/test-results/
+/web/playwright-report/

@@ -79,6 +79,7 @@ function NodeInspector({ data, id, onSelect }: { data: Summaries; id: string; on
   const links = data.topology.links
     .filter((l) => l.a === id || l.b === id)
     .sort((x, y) => y.observations - x.observations);
+  const measured = links.flatMap((l) => (l.snr_db ? [l.snr_db.median] : []));
   const spof = data.resilience?.single_points_of_failure.find((s) => s.id === id);
   const base = data.resilience?.baseline;
   return (
@@ -87,7 +88,11 @@ function NodeInspector({ data, id, onSelect }: { data: Summaries; id: string; on
       <dl className="metrics">
         <dt>Id</dt><dd className="mono">{node.id}</dd>
         <dt>Role</dt><dd>{node.role}{node.observer && <span className="chip live">observer</span>}</dd>
-        <dt>Links</dt><dd className="mono">{node.degree}</dd>
+        <dt>Links</dt><dd className="mono">{node.degree}{links.length !== node.degree && <small>{links.length} above 0.5 confidence</small>}</dd>
+        <dt>Receptions</dt>
+        <dd className="mono">{int(links.reduce((n, l) => n + l.observations, 0))}<small>on its links in this window</small></dd>
+        <dt>Measured links</dt>
+        <dd className="mono">{measured.length}<small>{measured.length ? `median SNR ${db(median(measured))}` : 'no last-hop SNR yet'}</small></dd>
         <dt>Last heard</dt><dd className="mono">{ago(node.last_heard)}</dd>
         <dt>Location</dt><dd className="mono">{node.location ? '~1 km grid cell' : 'not advertised'}</dd>
       </dl>
@@ -144,5 +149,11 @@ function LinkProfile({ region, a, b, names }: { region: string; a: string; b: st
   if (state.key !== key) return <p className="profile-state" role="status">Loading terrain profile…</p>;
   if (!state.res) return <p className="profile-state">{state.error}</p>;
   const p = state.res.profile;
-  return <ProfileChart profile={p} nameA={names(p.a)} nameB={names(p.b)} />;
+  return <ProfileChart profile={p} nameA={names(p.a)} nameB={names(p.b)} params={state.res.params} />;
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }

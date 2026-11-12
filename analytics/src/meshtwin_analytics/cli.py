@@ -154,7 +154,7 @@ def _propagation(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, 
         "written": write_summaries(run.region, docs, out)
         + write_summaries(
             run.region,
-            {"profiles": compare.profiles_json(run, profiles, model_meta, radio)},
+            compare.shard_profiles(compare.profiles_json(run, profiles, model_meta, radio)),
             out,
             compact=True,
         ),

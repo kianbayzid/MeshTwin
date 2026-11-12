@@ -73,7 +73,7 @@
 
 ## Phase 5: done (2026-11-09), pending the user's review
 - analytics-engineer: `placement.py` + `placement` CLI (0.01° candidate cells, new links via the `PropagationModel`, relay-aware gain, SPOFs removed for the top 50). Contract gained `method.dem`, `method.spofs_checked_top`.
-- go-engineer: `api/` module (contract endpoints, ETag/304, local + S3 stores, 8 MB cap, metrics, CSP) and the embedded Leaflet map.
+- go-engineer: `api/` module (contract endpoints, ETag/304, local + S3 stores, 8 MB cap, metrics, CSP) and the embedded Leaflet map (replaced by the 3D console, `docs/frontend.md`, 2026-11-11).
 - **Validation before serving:** every summary is decoded, checked against an allow-list of the contract's key paths and types,
   privacy rules applied (0.01° cells in range, 2–8 hex ids, names only for repeater/room, RFC 3339 times), then re-encoded;
   the raw file is never served. Took four verifier rounds; each round's bypasses are now test cases.

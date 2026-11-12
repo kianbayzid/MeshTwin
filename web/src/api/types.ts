@@ -176,3 +176,17 @@ export interface ProfileResponse {
   params: { freq_mhz: number; k_factor: number; grid_deg: number };
   profile: Profile;
 }
+
+export interface IngestStatus {
+  messages_per_s: number | null;
+  sync_lag_s: number | null;
+  spool_bytes: number | null;
+  spool_max_bytes: number | null;
+  storage_up: boolean | null;
+  mqtt_connected: boolean | null;
+}
+
+export interface StatusResponse {
+  as_of: string;
+  ingest: IngestStatus;
+}

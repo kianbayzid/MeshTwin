@@ -2,14 +2,14 @@
 
 A coverage digital twin for live MeshCore LoRa mesh networks: ingest observer
 packets (Go), store as Parquet in S3 (SeaweedFS), analyze topology / terrain propagation /
-resilience / placement (Python), serve read-only results (Go API + Leaflet map).
+resilience / placement (Python), serve read-only results (Go API + 3D web console).
 Portfolio project: every line must be explainable in an interview. Clear > clever.
 
 ## Repo layout
 | Path | Contents |
 |------|----------|
 | `/ingest` | Go ingester: MQTT/replay/synthetic sources, decoder, Parquet writer, DDIL buffer |
-| `/api` | Go read-only REST API + static Leaflet page |
+| `/api` | Go read-only REST API; serves the console (`web/dist`, embedded) |
 | `/web` | Vite + React + TS console (MapLibre 3D map); see `docs/frontend.md` |
 | `/analytics` | Python (uv): topology, propagation, comparison, resilience, placement |
 | `/schema` | Parquet schema definition + docs (single source of truth) |

@@ -122,7 +122,7 @@ var allowed = map[string]map[string]string{
 		"predicted_strong_but_never_seen[].possible_reasons[]":   "string",
 		"predicted_strong_but_never_seen[].predicted_snr_db":     "number",
 	}),
-	// profiles.json is the stored file (a list); the route serves one entry
+	// a profiles shard is the stored file (a list); the route serves one entry
 	// as "profile". Values are checked in checkProfiles.
 	"profiles": withMeta(map[string]string{
 		"model":                          "object",

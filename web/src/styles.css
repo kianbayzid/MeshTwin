@@ -65,13 +65,6 @@ button, input, select { font: inherit; color: inherit; }
 .buffer.is-filling dd { color: var(--amber); }
 .buffer.is-filling .meter { border-color: var(--amber); }
 .buffer.is-filling .meter > span { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
-.tag {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--magenta);
-  border: 1px dashed var(--magenta);
-  padding: 1px 8px;
-}
 
 /* Sidebar */
 .sidebar {
@@ -250,7 +243,10 @@ h3 { font-size: 14px; color: var(--ink-dim); margin-top: var(--s5); }
 .kv dd { overflow-wrap: anywhere; }
 .maplibregl-ctrl-top-left { top: 76px; left: 4px; }
 /* Attribution is a licence requirement (Copernicus, OSM): keep it readable and clear of the legend. */
-.maplibregl-ctrl.maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--ink-dim); font-size: 11px; max-width: calc(100% - 280px); }
+/* The bottom-right control corner spans from the legend's right edge (16 + 240 + 24 px) to the map's right edge, so
+   the attribution wraps inside a real width instead of a percentage of a shrink-to-fit box. */
+.maplibregl-ctrl-bottom-right { left: 280px; display: flex; flex-direction: column; align-items: flex-end; }
+.maplibregl-ctrl.maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--ink-dim); font-size: 11px; }
 .maplibregl-ctrl.maplibregl-ctrl-attrib a { color: var(--ink-dim); }
 .maplibregl-ctrl-attrib-button { filter: invert(0.85); }
 
@@ -305,3 +301,27 @@ h3 { font-size: 14px; color: var(--ink-dim); margin-top: var(--s5); }
 .profile-key svg { width: 16px; height: 10px; flex: none; }
 .profile figcaption { margin-top: var(--s2); font-size: 13px; color: var(--ink-dim); }
 .profile-state { margin: var(--s4) 0 var(--s5); padding: var(--s3); border: 1px solid var(--line); color: var(--ink-dim); font-size: 13px; }
+.filling { color: var(--amber); font-family: var(--sans); font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) {
+  /* The one ambient animation besides the SPOF pulse: a filling buffer should catch the eye. */
+  .buffer.is-filling .meter > span { animation: fill-glow 2.4s ease-in-out infinite; }
+}
+@keyframes fill-glow { 50% { box-shadow: 0 0 2px var(--amber); } }
+/* Keep the attribution (a licence requirement) beside an open inspector, never under or over it. */
+.inspector { z-index: 3; }
+.stage:has(.inspector) .maplibregl-ctrl-bottom-right { right: var(--inspector); }
+@media (max-width: 800px) {
+  .maplibregl-ctrl-bottom-right { left: 0; }
+  .stage:has(.inspector) .maplibregl-ctrl-bottom-right { right: 0; }
+}
+
+/* SPOF pulse: a MapLibre Marker (positioned via its own transform) holding a span that the compositor animates. */
+.spof-pulse { width: 20px; height: 20px; pointer-events: none; }
+.spof-pulse > span { display: block; width: 100%; height: 100%; border-radius: 50%; border: 1.5px solid var(--amber); opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .spof-pulse > span { animation: spof-pulse 2.4s ease-out infinite; }
+}
+@keyframes spof-pulse {
+  from { transform: scale(1); opacity: 0.7; }
+  to { transform: scale(2.4); opacity: 0; }
+}

@@ -53,6 +53,11 @@ func (l Local) List(_ context.Context) (map[string][]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list summaries: %w", err)
 	}
+	shards, err := fs.Glob(os.DirFS(l.Root), "summaries/region=*/profiles/*.json")
+	if err != nil {
+		return nil, fmt.Errorf("list profile shards: %w", err)
+	}
+	files = append(files, shards...)
 	m := map[string][]string{}
 	for _, f := range files {
 		addKey(m, path.Clean(f))

@@ -46,12 +46,11 @@ Before reading a community's feed, check that the broker's terms allow third-par
   > produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.
   > The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30.
 
-## Map page (Phase 5)
+## Map page (Phase 5, replaced)
 
-| source | terms | how we comply |
-|---|---|---|
-| OpenStreetMap standard tiles (`tile.openstreetmap.org`) | [Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/): visible "© OpenStreetMap contributors" attribution, a valid Referer/User-Agent (browsers send these), no bulk download or prefetching; heavy use is not allowed and access can be withdrawn | attribution in the map corner; tiles load only as the viewer pans; fine for a demo. **For a public deployment, switch to a commercial tile provider or self-hosted tiles** (one URL in `app.js`). |
-| Leaflet 1.9.4 (BSD-2-Clause) via unpkg | free CDN, no terms beyond the licence | pinned version with SRI hashes; the CSP allows only that host |
+The Leaflet page (Leaflet 1.9.4 from unpkg, OpenStreetMap standard tiles from `tile.openstreetmap.org`) was replaced
+by the console in Console Phase 6 (2026-11-11). The console loads nothing from other origins; the CSP
+(`docs/api-contract.md`) no longer allows unpkg or the OSM tile servers. Basemap terms: see "Console basemap" below.
 
 The map also shows the Copernicus attribution (Terrain section), because residuals and placement are derived from the DEM.
 
@@ -62,6 +61,13 @@ The map also shows the Copernicus attribution (Terrain section), because residua
 | Protomaps daily planet build (`build.protomaps.com/YYYYMMDD.pmtiles`), vector tiles from OpenStreetMap | Data: [ODbL](https://opendatacommons.org/licenses/odbl/) via OSM, attribution "© OpenStreetMap contributors" required. Protomaps asks for credit; build files are public downloads (HTTP Range) | `web/scripts/fetch-basemap.sh` reads the build list from `build-metadata.protomaps.dev/builds.json` (newest daily build), then extracts **once** with `pmtiles extract` (go-pmtiles v1.31.2, pinned) for the region box only, max zoom 14. The file is served by us, never hotlinked, not committed (`.gitignore`). Attribution shown in the map's attribution control. |
 | `@protomaps/basemaps` 5.7.2 (BSD-3-Clause), `pmtiles` 4.5.0 (BSD-3-Clause), `maplibre-gl` 5 (BSD-3-Clause) | npm packages, bundled into `web/dist` | versions pinned in `web/package-lock.json` |
 
+- Build and CI only (never at runtime), pinned like every other image/action here:
+  - `node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee` (official Docker
+    image): the API image's console build stage. `npm ci --ignore-scripts` from the lockfile; nothing from it reaches
+    the final distroless image. The API image is built with `--build-context web=web`.
+  - `mcr.microsoft.com/playwright:v1.65.0-noble@sha256:9beb546099e11f52d62e505537914870e01a67e0e6b00ae41da4775324e73dbe`
+    (official Microsoft image): the CI `e2e` job's container, with browsers matching `@playwright/test` 1.65.0.
+  - `actions/setup-node` v7.1.0 pinned to `949feb2413d6458794dcd2491c4babbbce0c15c1`.
 - The console makes **no third-party requests** at runtime: basemap, terrain tiles, fonts and icons are all same-origin.
   No external terrain fallback exists; without terrain tiles the map is flat.
 

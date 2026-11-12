@@ -10,16 +10,24 @@ real terrain, what the radio model predicted, what the mesh actually did, and wh
 | 2 | DEM → terrain-RGB tiles, PMTiles basemap, offline 3D map | done (2026-11-11) |
 | 3 | Layers wired to the real API | done (2026-11-11) |
 | 4 | Link inspector: terrain profile + Fresnel zone (new endpoint) | done (2026-11-11) |
-| 5 | Node inspector, parameter panel, status strip on live metrics | — |
-| 6 | Performance, Helm, Playwright in CI, README media | — |
+| 5 | Node inspector, parameter panel, status strip on live metrics | done (2026-11-11) |
+| 6 | Performance, Helm, Playwright in CI, README media | done (2026-11-11) |
 
 ## Run
 ```sh
 cd web && npm install
-npm run dev              # http://localhost:5173, fixture data
+npm run dev              # http://localhost:5173 (needs the API on 127.0.0.1:8080, see below)
 npm run build            # tsc (strict) + vite build into web/dist
-npm run check:contrast   # fails if any palette text pairing is below WCAG AA 4.5:1
+npm test                 # self-checks: palette contrast (WCAG AA), profile chart geometry, link picking
+npm run build:e2e        # build with the Playwright test hook into web/dist-e2e
+npm run e2e              # smoke tests against a running API (E2E_BASE_URL; PW_CHANNEL=chrome to use local Chrome)
 ```
+
+From the repo root: `make web` (npm ci + test + build) and `make e2e` (builds the API, serves `web/dist-e2e` with
+the API's test fixtures and runs the smoke suite; `E2E_LISTEN=127.0.0.1:<port>` if 8080 is taken). On Windows, stop a
+running Vite dev server first: `npm ci` can't replace `esbuild.exe` while it's in use. In Helm, the basemap is off
+by default; `api.basemap.hostPath` mounts a directory of `*.pmtiles` read-only (k3d shortcut; a ReadOnlyMany PVC on a
+real cluster).
 
 With real terrain (dev): build the tiles once, run the API on them; Vite proxies `/api` to it.
 ```sh
@@ -44,10 +52,9 @@ sh web/scripts/fetch-basemap.sh   # optional, once, online: OSM basemap into web
 - **Fonts are self-hosted** through `@fontsource` (Barlow Semi Condensed for labels, JetBrains Mono for values),
   bundled by Vite. No Google Fonts request.
 - **Mock data is the API's own test fixtures** (`api/testdata/summaries/region=SEA`, copied to `web/src/mock/`), so
-  the UI is typed and laid out against shapes the API really emits. Phase 3 replaces `api/mock.ts` with `fetch`.
-  The status strip shows "Sample data" while this is the case.
+  the UI is typed and laid out against shapes the API really emits. (Phase 3 replaced them with `fetch`.)
 - **Map engine:** MapLibre GL JS 5 with native layers (deck.gl decision: see Phase 3).
-- **Serving (planned for Phase 6):** embed `web/dist` in the Go API with `embed.FS`, replacing the Leaflet page.
+- **Serving (done in Phase 6):** embed `web/dist` in the Go API with `embed.FS`, replacing the Leaflet page.
   The API already has a CSP, ETags and a static route, so this avoids a second container and a second origin
   (no CORS). Cost: the API image changes when the UI does.
 
@@ -70,27 +77,124 @@ sh web/scripts/fetch-basemap.sh   # optional, once, online: OSM basemap into web
 - **2D/3D:** 2D removes terrain (`setTerrain(null)`) and flattens the camera; 3D drapes nodes and links over the DEM.
   Hillshade and 3D terrain use separate sources over the same tiles, as MapLibre's terrain example does.
 - **No external terrain fallback.** It wasn't needed, so there is no option to turn on.
-- **Offline check:** Playwright records every request during load, 3D, exaggeration and 2D: zero leave the origin.
+- **Offline check:** a manual Playwright session recorded every request during load, 3D, exaggeration and 2D: zero
+  left the origin. Since Phase 6 the CI smoke suite asserts it on every run.
 
+## Decisions (Phase 3)
+- **Links are draped, not arced; no deck.gl.** MapLibre 5.24's line layer has no elevation property (checked
+  against the installed style spec), so arcs need deck.gl's ArcLayer or a custom WebGL layer, plus per-endpoint
+  `queryTerrainElevation` to sit on the terrain. That is a second renderer and roughly 250 kB gzip for an
+  effect the brief lists as optional ("draped over or arcing above"). Draped lines show the same thing: which
+  links exist and their colour. Follow-up if wanted: deck.gl `MapboxOverlay` (interleaved) + `ArcLayer`.
+- **Each summary loads independently** (`Promise.allSettled`). Topology is required; a missing resilience,
+  residuals, surprising or placement summary disables only its layer, and the toggle shows the API's own error
+  message. Checked by answering `placement` with a 503 in Playwright.
+- **Region comes from `/api/v1/regions`** (first one with a topology); the selector lists all of them. Switching
+  region rebuilds the map (`key={region}`), because the terrain source is per region.
+- **Predicted-only links** (`links/surprising` → `predicted_strong_but_never_seen`) are a magenta dotted layer,
+  off by default (50 links clutter the first view). Not clickable: there is no observed link to inspect.
+- **Placement badges never overlap.** Neighbouring cells often tie (six at 0.95 in SEA); the better rank keeps the
+  space and the rest appear as you zoom in. Nodes ignore placement so they never hide a candidate.
+- **Fixtures removed from `web/`.** The app only renders what the API returns.
+- **Display fixes driven by real data:** `fresnel_clearance` is shown as a ratio of the first Fresnel radius
+  (−18.75 × F1), not a percentage; a link inside one grid cell shows "under 1 km" instead of "0.0 km".
 
-The strip is designed around metrics that already exist (wired in Phase 5):
+## Decisions (Phase 4)
+- **Profiles are precomputed by the propagation job, not computed in the API.** The Go API stays a read-only,
+  validating server of summaries; the radio math lives in one place (Python). The job writes `profiles.json`
+  (237 profiles for SEA, 438 KiB compact, 0.06 s extra per run) and the API returns one entry per request,
+  indexed once per cache load.
+- **One geometry function.** `FsplKnifeEdge.geometry()` computes ground, Earth bulge, ray and Fresnel radius; the
+  model's `predict` and the profile export both call it, and a test checks they agree exactly.
+- **Privacy: profiles run between grid-cell centres.** An elevation sequence along the exact path is a fingerprint
+  that could be matched against the public DEM to find a node, so exact paths never leave analytics. A test moves
+  the exact positions within their cells and asserts the profile doesn't change (the verifier broke the rule on
+  purpose and the test failed). The difference is small in practice (link 351FC1F9–FDC42289: −18.66 × F1 on the
+  grid path vs −18.75 × F1 exact).
+- **The chart does no physics.** `web/src/profile.ts` only adds `ground + bulge`, draws the straight mast-to-mast
+  line and divides by the given `r1`; the 60 % Fresnel rule marks obstructions. `npm test` runs a self-check.
+- **Hand-rolled SVG, no chart library.** One chart, one y-axis (metres), about 150 lines. Hover crosshair + tooltip,
+  arrow keys for keyboard users, a text summary as the accessible name and caption, and a key in which every
+  meaning has a line style as well as a colour (amber solid = blocks the ray, amber dotted = inside 60 % of the zone).
+- **Known limit:** the chart arrays are capped at 256 points, so on paths over ~7.6 km a very narrow obstacle can be
+  thinner than one chart sample; the published clearance and diffraction come from the full-resolution path.
 
-| Strip item | Source |
-|------------|--------|
-| Ingest | `rate(meshtwin_ingest_messages_total)` |
-| Sync lag | `meshtwin_ingest_spool_oldest_age_seconds` |
-| Disk buffer | `meshtwin_ingest_spool_bytes` / `meshtwin_ingest_spool_max_bytes`; amber above 50 % or when storage is down |
-| Storage | `meshtwin_ingest_storage_up` |
-| Data from | `meta.generated_at` of the topology summary; amber after 2 h (two missed hourly runs) |
+## Decisions (Phase 5)
+- **Status strip from Prometheus, through the API.** The browser can't scrape the ingester (another origin, and a
+  rate needs two scrapes), so the API runs six fixed PromQL instant queries against `PROMETHEUS_URL` and serves
+  `/api/v1/status`, cached 10 s. Nothing from the request reaches Prometheus. Without a URL the endpoint is
+  `503 not_ready` and the strip says "metrics unavailable" instead of showing numbers. The sample values are gone.
+
+  | strip item | query |
+  |---|---|
+  | Ingest | `sum(rate(meshtwin_ingest_messages_total{result="ok"}[5m]))` |
+  | Sync lag | `max(meshtwin_ingest_spool_oldest_age_seconds)`; amber above 5 min |
+  | Disk buffer | `sum(meshtwin_ingest_spool_bytes)` / `sum(meshtwin_ingest_spool_max_bytes)` |
+  | Storage | `min(meshtwin_ingest_storage_up)`, true when 1 (compared in Go: PromQL `==` filters) |
+  | Broker | `min(meshtwin_ingest_mqtt_connected)`, true when 1 |
+  | Data from | `meta.generated_at` of the topology summary; amber after 2 h |
+- **"The DDIL buffer is filling" is one rule:** storage down, or the spool past 50 %. Then the meter turns amber, gets
+  a slow glow (off under reduced motion) and the words "▲ filling"; the storage item says "buffering to disk".
+- **Polling, not push.** Status every 15 s, regions every 60 s, both paused while the tab is hidden. When a region's
+  `updated_at` changes, the summaries are swapped in place: the map keeps its camera and selection (checked in a
+  manual Playwright run with a fake clock: no reload while unchanged, one reload on a new version, bearing kept).
+- **Filters stay client-side, debounced 150 ms.** The API's `min_confidence` does the same filtering, so a refetch
+  per slider tick would only add latency; the debounce stops the map rebuilding 300+ features on every tick.
+- **Parameter panel is read-only for model parameters.** The API is read-only: it reports antenna height (placement),
+  model and DEM (residuals); frequency and k-factor come with each terrain profile, so the chart caption shows them.
+  The time window is the job's; the API has no window parameter.
+- **Node packet stats are derived from its links** (receptions on its links, measured links, median last-hop SNR):
+  the contract has no per-node packet counter, and adding one isn't worth a schema change.
+- **"Can't reach the API"** now also covers a dev proxy or gateway answering 5xx with a non-JSON body (the
+  confusing "HTTP 500" seen when the API process was stopped).
+
+## Decisions (Phase 6)
+- **Served by the Go API from the binary.** `web/dist` is embedded at image build time (`--build-context web=web`, a
+  Node stage that never reaches the distroless image; API image 22.2 → 25.1 MB). `/` is `no-cache`, `/assets/*` are
+  content-hashed and `immutable`. The CSP allows only `'self'`, plus `blob:` for MapLibre's workers and images.
+  The strict CSP immediately caught Vite inlining small font subsets as `data:` URIs; the build now never inlines
+  fonts rather than the CSP allowing `data:` fonts.
+- **Idle map = zero frames.** The SPOF pulse was a paint property updated every animation frame, which kept the 3D map
+  re-rendering ~45 times a second with nothing moving (found because the smoke tests could never see the map idle).
+  It is now a handful of DOM markers animated by CSS on the compositor; the static ring stays a map layer. Measured:
+  45 → 0 renders/s idle.
+- **Click picks the nearest line, not the topmost.** In dense clusters the 12 px click areas of 3–4 links overlap, and
+  the topmost won, so some short links could not be selected at all at the default zoom. `src/map/pick.ts` picks the
+  line closest to the cursor (self-checked by `npm test`).
+- **Profiles are sharded** (contract change). At 5× the fixture, one `profiles.json` was 9.1 MB, over the API's 8 MB
+  cap, so every profile lookup would have failed. 16 shard files by the first hex digit of the smaller id; a bad shard
+  only affects its own lookups. The shards are uneven (the smaller of two hex digits leans low): the busiest reaches
+  the cap at about 19,000 profiles. An XOR rule would spread them evenly; recorded as a follow-up.
+- **Playwright smoke tests in CI** (`web/e2e/smoke.spec.ts`): the real API serving the e2e build and its committed
+  fixtures. They fail on any console error (so any CSP violation), any request leaving the origin, and any HTTP
+  failure other than the contract's expected ones (terrain tiles outside the tile set, no basemap, no Prometheus).
+  The e2e build (`vite --mode e2e`) exposes the map to tests; production builds drop that line.
+- **Performance probe** (`web/e2e/perf.spec.ts`, `PERF=1`, not a CI gate): time to a drawn network, idle renders,
+  frame times while panning, heap. Numbers in `docs/benchmarks.md`.
+- **Helm:** `PROMETHEUS_URL` points the status strip at the chart's Prometheus; the basemap is off by default and
+  `api.basemap.hostPath` mounts a `*.pmtiles` directory read-only (k3d shortcut).
+- **README media are reproducible:** `web/scripts/capture-media.mjs` takes the screenshots and the GIF (frames as
+  screenshots, encoded by the system ffmpeg).
+
+## Reading the SEA demo data honestly
+The SEA summaries come from the synthetic fixture (`testdata/parquet/sea-seed1-2h-hash1`) run through the real
+pipeline **with** the GLO-30 DEM (analytics lane, 2026-11-11). The generator's link model ignores terrain: path loss
+uses a distance exponent of 7.5 that "stands in for ground clutter and terrain" (`ingest/internal/synth/network.go`).
+So the residual RMSE falling from 30.7 dB (flat) to 19.1 dB (GLO-30) is the DEM's diffraction loss soaking up
+that exponent, **not** evidence that the terrain model explains reality: residual correlates with diffraction loss at
+r = +0.89, and line-of-sight links fit worst. The map shows "model vs synthetic network" until a real capture exists.
+Also from the synthetic data: two repeaters sit at ~0 m (likely in Puget Sound; the generator has no land check).
 
 ## Known gaps
 - The coverage layer stays disabled until a coverage raster exists. No contour lines (optional in the brief; skipped).
 - Edge tiles are 0 m outside `bounds`, so the relief ends in a step at the box edge (visible when zoomed out).
 - Links are draped over the terrain, so long links follow the ground (see the Phase 3 deck.gl decision).
-- The time window is what the job produced; the API has no window parameter. Summaries aren't re-fetched
-  while the page is open (Phase 5).
-- Model parameters are read-only: the API exposes antenna height, model and DEM, but not frequency.
-- The JS bundle is 1.5 MB minified (367 kB gzip), mostly MapLibre. Phase 6 measures it and splits it if needed.
+- The time window is what the job produced; the API has no window parameter.
+- The JS bundle is 1.3 MB minified (361 kB gzip), mostly MapLibre, in one chunk. Not split: MapLibre is needed for the
+  first paint, so a split would only help caching across deploys.
+- Map features (nodes, links) are reachable by mouse only; a keyboard-accessible list of nodes and links is not built.
+- At 5× scale the resilience layer is empty (0 SPOFs: the denser synthetic network has none), so SPOF rendering at
+  scale is untested.
 
 ## Interview questions (Phase 1)
 1. **Why put the palette in TypeScript instead of a CSS file?** The map's paint expressions run in WebGL and
@@ -133,3 +237,23 @@ The strip is designed around metrics that already exist (wired in Phase 5):
 3. **How do you know the chart and the model agree?** They share one geometry function, tested to reproduce `predict`
    exactly; the chart's own arithmetic (terrain + bulge, mast-to-mast ray, clearance ÷ r1) has a self-check, and the
    worst clearance it shows (−18.66 × F1) equals the job's published value for the same path.
+
+## Interview questions (Phase 5)
+1. **Why does the API query Prometheus instead of the browser scraping the ingester?** A rate needs two samples over
+   time and every ingester replica; Prometheus already has both. The API runs fixed queries (no injection surface),
+   caches them for 10 s so open consoles can't load Prometheus, and degrades to "metrics unavailable".
+2. **How does the UI show the DDIL buffer filling?** One rule (storage down or spool > 50 %) drives an amber meter, a
+   ▲ "filling" label and the storage text, so it reads without colour and without motion.
+3. **How do new job results reach an open console without a reload?** A 60 s poll of `/regions` compares
+   `updated_at`; only a change fetches the summaries, which are swapped into the existing map sources, so the
+   camera and the selected link survive. Hidden tabs don't poll.
+
+## Interview questions (Phase 6)
+1. **What did the performance pass find?** Two real problems, both found by tests rather than by looking: an animation
+   that kept the 3D map rendering ~45 frames a second while idle (now 0, via CSS on DOM markers), and a summary file
+   that outgrew the API's size cap at 5× scale (now sharded). At 5× (3,790 links drawn) panning holds 60 fps.
+2. **What do the smoke tests prove?** The real API binary, real CSP, real build: the region loads with terrain, layers
+   toggle, 2D drops terrain, a link click opens its terrain profile, a SPOF's what-if answers. Any console error, any
+   request to another origin and any unexpected HTTP failure fails the run, which is how the CSP font problem surfaced.
+3. **Why embed the console in the API instead of an nginx container?** One origin (no CORS), one CSP, one image to
+   scan and sign, ETags already there. The cost is coupling: a UI change rebuilds the API image (+2.9 MB).

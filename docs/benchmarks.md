@@ -234,3 +234,29 @@ Caveat: the synthetic generator ignores terrain, so the GLO-30 improvement is no
 | `profiles.json` | 448,295 B compact (72,748 B gzip); API cap 8 MB ≈ 750 indented / 1,300+ compact profiles |
 | time added to the propagation job | 0.06 s |
 | grid path vs exact path, 351FC1F9–FDC42289 | clearance −18.66 vs −18.75 × F1; diffraction 41.3 vs 41.4 dB |
+
+## Console Phase 6: performance pass (2026-11-11)
+
+**Browser** (`web/e2e/perf.spec.ts`, local Chrome, 1440×900, production e2e build served by the Go API):
+
+| data | drawn | first network | idle renders/s | pan frame p50 / p95 / max | JS heap |
+|---|---|---|---|---|---|
+| SEA fixture, before the pulse fix (dev server) | 73 nodes, 242 links | 2.9 s | **45** | 16.7 / 33.4 / 66.5 ms | 53 MB |
+| SEA fixture, after (dev server) | 73 nodes, 242 links | 2.7 s | **0** | 16.7 / 33.4 / 50.6 ms | 39 MB |
+| 5× network (3 runs, production build) | 257 nodes, 3,790 links | 1.6–2.7 s | 0 | 16.6 / 16.7 / 16.8–20.2 ms | 31–43 MB |
+
+**5× pipeline** (`meshgen -repeaters 150 -companions 300 -observers 30 -hash-size 1 -duration 2h -rate 30`, Docker, capped):
+
+| step | wall | peak memory | output |
+|---|---|---|---|
+| meshgen | 101 s | 27 MiB | 1,934,342 receptions (1.2 GB NDJSON) |
+| ingest (replay) | 16.6 s | 1.84 GiB | 2,348,075 rows, 58.2 MB Parquet |
+| topology | 110 s | 2.53 GiB | 326 nodes, 5,977 links, 0 SPOFs |
+| propagation, GLO-30 | 114 s | 2.46 GiB | 834 residual links, 3,747 profiles (16 shards, 11.7 KB – 1.57 MB) |
+| placement, GLO-30 | 215 s (placement step 105–127 s; 98 s after computing the base reachability once) | 2.53 GiB | 1,598 candidates, identical output |
+
+- The first attempt at `-rate 120` projected ~8M receptions / 5 GB NDJSON: past this machine's memory. ~2M receptions is
+  the practical ceiling for one run here.
+- Propagation and placement each redo ~90 s of topology work; reusing the topology job's output is a recorded follow-up.
+- Profile lookup from the largest shard: 29 ms cold (parse + validate 1.57 MB), 1.3 ms cached.
+- API image with the embedded console: 22.2 → 25.1 MB (5.38 → 6.25 MB compressed).

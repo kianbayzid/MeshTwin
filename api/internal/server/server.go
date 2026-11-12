@@ -1,4 +1,4 @@
-// Package server is the read-only REST API and map page (docs/api-contract.md).
+// Package server is the read-only REST API and the console it serves (docs/api-contract.md).
 package server
 
 import (
@@ -15,6 +15,8 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,25 +29,32 @@ import (
 	"meshtwin/api/internal/store"
 )
 
-//go:embed static
+// all: so Vite chunks whose names start with "_" are not silently dropped.
+//
+//go:embed all:console
 var embedded embed.FS
 
-// Embedded is the map page compiled into the binary. static/ is checked at
-// compile time by go:embed, so Sub cannot fail.
-var Embedded, _ = fs.Sub(embedded, "static")
+// Embedded is the console compiled into the binary: index.html plus assets/
+// (the image build copies web/dist over the committed placeholder). console/
+// is checked at compile time by go:embed, so Sub cannot fail.
+var Embedded, _ = fs.Sub(embedded, "console")
 
 var errInvalid = errors.New("summary failed validation")
 
 // Server serves summaries from a Store. Loaded summaries are validated once
 // and cached for TTL.
 type Server struct {
-	store  store.Store
-	static fs.FS
-	ttl    time.Duration
-	now    func() time.Time
+	store   store.Store
+	static  fs.FS
+	basemap *os.Root // nil: /basemap/ is 404 (see SetBasemapDir)
+	ttl     time.Duration
+	now     func() time.Time
 
 	mu    sync.Mutex
 	cache map[string]entry
+
+	prom        *url.URL // nil: GET /api/v1/status is 503 (see SetPrometheus)
+	statusCache statusCache
 }
 
 type entry struct {
@@ -54,8 +63,8 @@ type entry struct {
 	at  time.Time
 }
 
-// New returns a Server. static is the map page (Embedded, or os.DirFS for a
-// dev override); ttl is how long a loaded summary is reused.
+// New returns a Server. static is the console (Embedded, or a directory with
+// the same layout for a dev override); ttl is how long a loaded summary is reused.
 func New(st store.Store, static fs.FS, ttl time.Duration) *Server {
 	return &Server{store: st, static: static, ttl: ttl, now: time.Now, cache: map[string]entry{}}
 }
@@ -67,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /api/v1/regions", s.regions)
+	mux.HandleFunc("GET /api/v1/status", s.status)
 	mux.HandleFunc("GET /api/v1/regions/{region}/topology", s.summaryHandler("topology", topologyQuery))
 	mux.HandleFunc("GET /api/v1/regions/{region}/resilience", s.summaryHandler("resilience", nil))
 	mux.HandleFunc("GET /api/v1/regions/{region}/links/residuals", s.summaryHandler("residuals", residualsQuery))
@@ -76,8 +86,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/regions/{region}/terrain.json", s.summaryHandler("terrain", nil))
 	// A wildcard must be a whole segment, so "{y}.png" is matched as {file} and parsed in tile.
 	mux.HandleFunc("GET /api/v1/regions/{region}/terrain/{z}/{x}/{file}", s.tile)
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, s.static, "index.html") })
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(s.static)))
+	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("GET /assets/", s.asset)
+	mux.HandleFunc("GET /basemap/{file}", s.basemapFile)
 	return instrument(mux)
 }
 
@@ -214,11 +225,11 @@ func (s *Server) summary(ctx context.Context, region, name string) ([]byte, erro
 			b, err = validate(region, name, b)
 		}
 		if err != nil {
-			validationFailures.WithLabelValues(name).Inc()
+			validationFailures.WithLabelValues(base(name)).Inc()
 			slog.Error("summary failed validation; not serving it", "region", region, "summary", name, "err", err)
 			return nil, fmt.Errorf("%w: %w", errInvalid, err)
 		}
-		recordGenerated(region, name, b)
+		recordGenerated(region, base(name), b)
 		return b, nil
 	})
 }
@@ -290,30 +301,14 @@ func (s *Server) regions(w http.ResponseWriter, r *http.Request) {
 	out := []regionInfo{}
 	for _, region := range slices.Sorted(maps.Keys(list)) {
 		info := regionInfo{Region: region, Summaries: []string{}}
-		for _, name := range list[region] {
-			data, err := s.summary(r.Context(), region, name)
-			if err != nil {
+		for _, name := range store.Names {
+			docs := s.servable(r.Context(), region, name, list[region])
+			if docs == nil {
 				continue
 			}
 			info.Summaries = append(info.Summaries, name)
-			var head struct {
-				Meta struct {
-					GeneratedAt time.Time `json:"generated_at"`
-				} `json:"meta"`
-				Stats *struct {
-					Nodes int `json:"nodes"`
-					Links int `json:"links"`
-				} `json:"stats"`
-			}
-			if json.Unmarshal(data, &head) != nil {
-				continue
-			}
-			// Terrain changes only with the DEM; it says nothing about how fresh the mesh data is.
-			if t := head.Meta.GeneratedAt.UTC(); name != "terrain" && (info.UpdatedAt == nil || t.After(*info.UpdatedAt)) {
-				info.UpdatedAt = &t
-			}
-			if name == "topology" && head.Stats != nil {
-				info.Nodes, info.Links = &head.Stats.Nodes, &head.Stats.Links
+			for _, data := range docs {
+				addHead(&info, name, data)
 			}
 		}
 		if len(info.Summaries) > 0 {
@@ -326,6 +321,64 @@ func (s *Server) regions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, r, data)
+}
+
+// servable returns the validated documents behind summary name, or nil if
+// the API would not serve it. profiles counts only when all 16 shards are
+// listed and valid: up to 16 reads per region on a cache miss, cached like any
+// summary after that, and no read at all while a shard is missing from the listing.
+func (s *Server) servable(ctx context.Context, region, name string, listed []string) [][]byte {
+	parts := []string{name}
+	if name == "profiles" {
+		parts = nil
+		for i := range len(store.ProfileShards) {
+			parts = append(parts, store.ProfileShard(store.ProfileShards[i]))
+		}
+	}
+	for _, p := range parts {
+		if !slices.Contains(listed, p) {
+			return nil
+		}
+	}
+	docs := make([][]byte, 0, len(parts))
+	for _, p := range parts {
+		data, err := s.summary(ctx, region, p)
+		if err != nil {
+			return nil
+		}
+		docs = append(docs, data)
+	}
+	return docs
+}
+
+// addHead folds one validated summary's generated_at and topology counts into info.
+func addHead(info *regionInfo, name string, data []byte) {
+	var head struct {
+		Meta struct {
+			GeneratedAt time.Time `json:"generated_at"`
+		} `json:"meta"`
+		Stats *struct {
+			Nodes int `json:"nodes"`
+			Links int `json:"links"`
+		} `json:"stats"`
+	}
+	if json.Unmarshal(data, &head) != nil {
+		return
+	}
+	// Terrain changes only with the DEM; it says nothing about how fresh the mesh data is.
+	if t := head.Meta.GeneratedAt.UTC(); name != "terrain" && (info.UpdatedAt == nil || t.After(*info.UpdatedAt)) {
+		info.UpdatedAt = &t
+	}
+	if name == "topology" && head.Stats != nil {
+		info.Nodes, info.Links = &head.Stats.Nodes, &head.Stats.Links
+	}
+}
+
+// base is a summary's name without its shard ("profiles/0" -> "profiles"),
+// for metric labels and validation.
+func base(name string) string {
+	b, _, _ := strings.Cut(name, "/")
+	return b
 }
 
 // writeJSON sends data with an ETag of exactly these bytes (the validated,
@@ -348,7 +401,8 @@ func writeBody(w http.ResponseWriter, r *http.Request, data []byte, contentType,
 		return
 	}
 	h.Set("Content-Type", contentType)
-	_, _ = w.Write(data) //nolint:gosec // G705: data is JSON we re-encoded or a PNG whose header we checked, sent with its own Content-Type, nosniff and a strict CSP (see instrument)
+	// data is JSON we re-encoded or a PNG whose header we checked, sent with its own Content-Type, nosniff and a strict CSP (see instrument).
+	_, _ = w.Write(data)
 }
 
 // etagMatch implements If-None-Match's weak comparison: "*", or any listed

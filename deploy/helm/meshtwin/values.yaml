@@ -74,6 +74,15 @@ mosquitto:
 api:
   replicas: 2 # stateless: reads summaries from S3
   nodePort: 30080 # k3d maps a host port to this (deploy/k3d/cluster.yaml)
+  # Optional console basemap (docs/data-sources.md, web/scripts/fetch-basemap.sh).
+  # Off when empty: /basemap/* answers 404 and the console shows hillshade only.
+  # Set to a directory ON THE NODE holding <name>.pmtiles; it is mounted read-only
+  # at /basemap and BASEMAP_DIR points there. k3d: the node is a container, so map
+  # the host directory in when creating the cluster, e.g.
+  #   k3d cluster create --config deploy/k3d/cluster.yaml --volume "$PWD/web/public/basemap:/var/lib/meshtwin/basemap@server:0"
+  #   make deploy VALUES="--set api.basemap.hostPath=/var/lib/meshtwin/basemap"
+  basemap:
+    hostPath: ""
   resources:
     requests: {cpu: 25m, memory: 32Mi}
     limits: {cpu: 250m, memory: 128Mi}

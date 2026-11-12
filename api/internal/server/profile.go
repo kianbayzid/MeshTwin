@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"meshtwin/api/internal/store"
 )
 
-// profileIndex is profiles.json indexed by pair, built once per load of the
-// validated summary. Entries stay raw JSON, so nothing is reformatted.
+// profileIndex is one profiles shard indexed by pair, built once per load of
+// the validated shard. Entries stay raw JSON, so nothing is reformatted.
 type profileIndex struct {
 	meta, model, params json.RawMessage
 	pairs               map[[2]string]json.RawMessage
@@ -35,7 +37,7 @@ func indexProfiles(data []byte) (*profileIndex, error) {
 }
 
 // profile serves one link's terrain profile, looked up in either order and
-// returned in its stored orientation. profiles.json itself is never served.
+// returned in its stored orientation. Shards are never served whole.
 func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 	region, ok := regionParam(w, r)
 	if !ok {
@@ -46,10 +48,14 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "a and b must be node ids: 2-8 hex characters")
 		return
 	}
-	// The index has its own cache entry, built from the cached summary, so
-	// it can lag a new profiles.json by up to two TTLs (2 min by default).
-	idx, err := cached(s, region+"/profiles#index", func() (*profileIndex, error) {
-		data, err := s.summary(r.Context(), region, "profiles")
+	// Only the pair's shard is read. The shard character comes from validated
+	// hex ids, so the key has no other syntax. The index has its own cache
+	// entry, built from the cached shard, so it can lag a new shard by up to
+	// two TTLs (2 min by default).
+	key := pairKey(a, b)
+	shard := store.ProfileShard(key[0][0])
+	idx, err := cached(s, region+"/"+shard+"#index", func() (*profileIndex, error) {
+		data, err := s.summary(r.Context(), region, shard)
 		if err != nil {
 			return nil, err
 		}
@@ -59,7 +65,7 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 		s.writeLoadError(w, r, region, "profiles", err)
 		return
 	}
-	p, ok := idx.pairs[pairKey(a, b)]
+	p, ok := idx.pairs[key]
 	if !ok {
 		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no profile for link %s-%s in region %s", a, b, region))
 		return

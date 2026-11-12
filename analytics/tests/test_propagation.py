@@ -264,3 +264,44 @@ def test_no_profile_for_same_cell_or_unlocated() -> None:
     a = Node("aa" * 32, lat=47.0012, lon=-122.0)
     assert compare.profile(model, a, Node("bb" * 32, lat=47.0031, lon=-122.004), RADIO) is None
     assert compare.profile(model, a, Node("bb" * 32), RADIO) is None
+
+
+# --- profile shards (docs/api-contract.md "Storage (sharded, Console Phase 6)") ----------
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "shard"),
+    [
+        ("A1B2C3D4", "9F000000", "9"),
+        ("9f000000", "a1b2c3d4", "9"),
+        # Raw comparison would pick "B0" ('B' < 'a'); upper-cased, "A0" is smaller.
+        ("a0", "B0", "A"),
+        ("B0", "a0", "A"),
+        ("7f", "e3", "7"),  # 2-char hop-hash placeholders
+        ("f0", "fe", "F"),
+    ],
+)
+def test_profile_shard(a: str, b: str, shard: str) -> None:
+    assert compare.profile_shard(a, b) == shard
+
+
+def test_profile_shard_refuses_non_hex() -> None:
+    with pytest.raises(ValueError):
+        compare.profile_shard("zz", "zy")
+
+
+def test_shard_profiles_partitions_the_list() -> None:
+    ids = ["0a", "1B", "a0", "B0", "c3", "D4", "e5", "Ff", "7f", "e3", "33", "9f"]
+    rows = [{"a": a, "b": b, "n": i} for i, (a, b) in enumerate(itertools.combinations(ids, 2))]
+    doc = {"meta": {"region": "SEA"}, "model": {"name": "m"}, "params": {"k": 1}, "profiles": rows}
+    shards = compare.shard_profiles(doc)
+    assert list(shards) == [f"profiles/{s}" for s in "0123456789ABCDEF"]
+    assert shards["profiles/2"]["profiles"] == []  # empty shards are still written
+    for name, sd in shards.items():
+        assert {k: v for k, v in sd.items() if k != "profiles"} == {
+            k: v for k, v in doc.items() if k != "profiles"
+        }
+        assert all(compare.profile_shard(p["a"], p["b"]) == name[-1] for p in sd["profiles"])
+    union = [p for sd in shards.values() for p in sd["profiles"]]
+    assert sorted(union, key=lambda p: p["n"]) == rows  # each exactly once, nothing lost
+    assert doc["profiles"] is rows and len(rows) == 66  # input untouched

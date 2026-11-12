@@ -1,5 +1,5 @@
 // Typed GETs against docs/api-contract.md. Same origin: Vite proxies /api in dev, the Go API serves both in prod.
-import type { ApiErrorBody, Placement, ProfileResponse, RegionInfo, Residuals, Resilience, Surprising, Topology } from './types';
+import type { ApiErrorBody, Placement, ProfileResponse, RegionInfo, StatusResponse, Residuals, Resilience, Surprising, Topology } from './types';
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -17,7 +17,8 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
       code = e.code || code;
       message = e.message || message;
     } catch {
-      // Not the contract's error shape (e.g. a proxy error page); keep the status text.
+      // Not the contract's error shape: a dev proxy or gateway answered because the API itself is down.
+      if (r.status >= 500) message = `Can't reach the API (HTTP ${r.status} from the proxy). Check that it is running.`;
     }
     throw new ApiError(r.status, code, message);
   }
@@ -30,6 +31,7 @@ const at = (region: string) => `/regions/${encodeURIComponent(region)}`;
 
 export const api = {
   regions: (s?: AbortSignal) => get<{ regions: RegionInfo[] }>('/regions', s),
+  status: (s?: AbortSignal) => get<StatusResponse>('/status', s),
   topology: (r: string, s?: AbortSignal) => get<Topology>(`${at(r)}/topology`, s),
   resilience: (r: string, s?: AbortSignal) => get<Resilience>(`${at(r)}/resilience`, s),
   residuals: (r: string, s?: AbortSignal) => get<Residuals>(`${at(r)}/links/residuals?limit=1000`, s),

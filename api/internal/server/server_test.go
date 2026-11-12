@@ -51,11 +51,11 @@ const placementFixture = `{` + validMeta + `,
 
 func writeSummary(t *testing.T, root, region, name, body string) {
 	t.Helper()
-	dir := filepath.Join(root, "summaries", "region="+region)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	file := filepath.Join(root, "summaries", "region="+region, filepath.FromSlash(name)+".json") // name may be a shard, "profiles/0"
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name+".json"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -377,27 +377,6 @@ func TestReadyzStoreDown(t *testing.T) {
 	}
 	if rec := get(t, h, "/api/v1/regions"); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("regions = %d, want 503", rec.Code)
-	}
-}
-
-func TestMapPage(t *testing.T) {
-	h, _ := newTestServer(t, false)
-	for _, tc := range []struct{ url, want string }{
-		{"/", `integrity="sha384-`},
-		{"/static/app.js", "OpenStreetMap</a> contributors"},
-		{"/static/app.js", "Copernicus WorldDEM-30"},
-		{"/static/style.css", "#map"},
-	} {
-		rec := get(t, h, tc.url)
-		if rec.Code != 200 || !strings.Contains(rec.Body.String(), tc.want) {
-			t.Errorf("%s: status %d, missing %q", tc.url, rec.Code, tc.want)
-		}
-	}
-	csp := get(t, h, "/").Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'self'", "https://unpkg.com", "https://tile.openstreetmap.org"} {
-		if !strings.Contains(csp, want) {
-			t.Errorf("CSP %q lacks %q", csp, want)
-		}
 	}
 }
 

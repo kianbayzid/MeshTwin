@@ -1,5 +1,5 @@
 // Command api serves the analytics summaries as a read-only REST API plus
-// the Leaflet map page (docs/api-contract.md).
+// the console (index.html, assets/, optional PMTiles basemaps; docs/api-contract.md).
 //
 // Every setting is a flag with an environment-variable default (12-factor);
 // the S3 secret key is env-only so it never shows in a process listing.
@@ -28,7 +28,8 @@ func env(k, def string) string {
 }
 
 type config struct {
-	Listen, SummariesDir, StaticDir                string
+	Listen, SummariesDir, StaticDir, BasemapDir    string
+	PrometheusURL                                  string
 	S3Endpoint, S3AccessKey, S3SecretKey, S3Bucket string
 	S3TLS                                          bool
 	CacheTTL                                       time.Duration
@@ -36,12 +37,14 @@ type config struct {
 
 func parseConfig() config {
 	var c config
-	flag.StringVar(&c.Listen, "listen", env("LISTEN", ":8080"), "API, map page, /metrics and health endpoints")
+	flag.StringVar(&c.Listen, "listen", env("LISTEN", ":8080"), "API, console, /metrics and health endpoints")
 	flag.StringVar(&c.SummariesDir, "summaries-dir", env("SUMMARIES_DIR", ""), "read summaries from this directory instead of S3 (holds summaries/region=*/)")
-	flag.StringVar(&c.StaticDir, "static-dir", env("STATIC_DIR", ""), "serve the map page from this directory instead of the embedded copy (dev)")
+	flag.StringVar(&c.StaticDir, "static-dir", env("STATIC_DIR", ""), "serve the console (index.html, assets/) from this directory instead of the embedded copy (dev, e2e)")
+	flag.StringVar(&c.BasemapDir, "basemap-dir", env("BASEMAP_DIR", ""), "serve /basemap/{name}.pmtiles from this directory (empty: off, 404)")
 	flag.StringVar(&c.S3Endpoint, "s3-endpoint", env("S3_ENDPOINT", "localhost:9000"), "MinIO/S3 host:port")
 	flag.StringVar(&c.S3AccessKey, "s3-access-key", env("S3_ACCESS_KEY", ""), "access key (secret: env S3_SECRET_KEY)")
 	flag.StringVar(&c.S3Bucket, "s3-bucket", env("S3_BUCKET", "meshtwin"), "bucket")
+	flag.StringVar(&c.PrometheusURL, "prometheus-url", env("PROMETHEUS_URL", ""), "Prometheus base URL for GET /api/v1/status (empty: that endpoint answers 503)")
 	flag.BoolVar(&c.S3TLS, "s3-tls", env("S3_TLS", "false") == "true", "use HTTPS to S3")
 	ttl, err := time.ParseDuration(env("CACHE_TTL", "30s"))
 	if err != nil {
@@ -76,12 +79,23 @@ func run(c config) error {
 	}
 	static := server.Embedded
 	if c.StaticDir != "" {
-		static = os.DirFS(c.StaticDir)
+		root, err := os.OpenRoot(c.StaticDir) // like the embedded copy, nothing outside the directory
+		if err != nil {
+			return fmt.Errorf("static dir: %w", err)
+		}
+		static = root.FS()
 	}
 
+	api := server.New(st, static, c.CacheTTL)
+	if err := api.SetPrometheus(c.PrometheusURL); err != nil {
+		return err
+	}
+	if err := api.SetBasemapDir(c.BasemapDir); err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              c.Listen,
-		Handler:           server.New(st, static, c.CacheTTL).Handler(),
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -90,7 +104,7 @@ func run(c config) error {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("api listening", "addr", c.Listen, "local", c.SummariesDir != "", "static_override", c.StaticDir != "")
+	slog.Info("api listening", "addr", c.Listen, "local", c.SummariesDir != "", "static_override", c.StaticDir != "", "basemap", c.BasemapDir != "", "status_enabled", c.PrometheusURL != "")
 
 	select {
 	case err := <-errc:
