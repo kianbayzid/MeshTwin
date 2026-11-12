@@ -46,10 +46,13 @@ Regions with at least one summary.
 {
   "regions": [
     {"region": "SEA", "updated_at": "2026-11-09T14:00:00Z", "nodes": 87, "links": 241,
-     "summaries": ["topology", "resilience", "residuals", "placement"]}
+     "summaries": ["topology", "resilience", "residuals", "surprising", "profiles", "placement", "terrain"]}
   ]
 }
 ```
+- `updated_at` is the newest `generated_at` among the **data** summaries. Terrain doesn't count (it changes only with
+  the DEM), so a region with only `terrain` listed has `"updated_at": null`.
+- `nodes` and `links` come from the topology summary and are `null` while it doesn't exist.
 
 ### `GET /api/v1/regions/{region}/topology`
 The inferred link graph for the latest window. Source: the hourly topology job (Phase 3).
@@ -130,6 +133,8 @@ Query: `sort=residual|abs_residual|observations` (default `abs_residual`), `limi
 }
 ```
 - `residual_db = observed − predicted`. Positive means the link is better than the model expects.
+- `fresnel_clearance` is the smallest (ground clearance below the ray) / (first Fresnel zone radius) along the path:
+  a ratio, not a percentage. Negative means the ground blocks the line of sight; ≥ 0.6 is the usual "clear" rule.
 - All `sort` orders are descending: `residual` puts links much better than the model first; ties break on `a`, then `b`.
 - `summary.median_abs_residual_db`, `rmse_db` and `bias_db` are `null` when `links` is 0 (a 0 would claim a perfect fit).
 - `model.dem` is `"Copernicus GLO-30"` or `"flat (no DEM)"` when the job ran without terrain.
@@ -152,6 +157,56 @@ Where the model and reality disagree most. Source: the nightly propagation job (
   ]
 }
 ```
+
+### `GET /api/v1/regions/{region}/links/{a}/{b}/profile`
+The terrain profile under one link, for the link inspector's chart. Source: the nightly propagation job, which
+writes the profiles to 16 shard files (see Storage below); the API reads one shard and returns one entry.
+`{a}` and `{b}` are node ids (2–8 hex, as in topology) in either order. 404 `not_found` if the pair has no profile.
+The response keeps the stored orientation: `profile.a` is always index 0, whichever order the URL used.
+```json
+{
+  "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-09T03:00:00Z",
+           "window": {"from": "2026-11-02T03:00:00Z", "to": "2026-11-09T03:00:00Z"}, "source": "propagation-job"},
+  "model": {"name": "fspl+knife-edge", "version": "1", "dem": "Copernicus GLO-30"},
+  "params": {"freq_mhz": 910.525, "k_factor": 1.333, "grid_deg": 0.01},
+  "profile": {
+    "a": "351FC1F9", "b": "3491927B", "distance_km": 8.4,
+    "antenna_a_m": 10.0, "antenna_b_m": 10.0,
+    "ground_m": [52.1, 54.0, 61.3, 58.2],
+    "bulge_m": [0.0, 1.5, 1.5, 0.0],
+    "fresnel_r1_m": [0.0, 15.4, 15.4, 0.0],
+    "line_of_sight": false, "fresnel_clearance": -0.31, "diffraction_loss_db": 8.9
+  }
+}
+```
+- **Privacy: the path runs between the two snapped 0.01° cell centres, not the nodes' exact positions.** An elevation
+  sequence along the exact path could be matched against the public DEM to recover a location, so exact paths never
+  leave analytics. `distance_km` is the same snapped distance as in residuals (0.1 km).
+- Arrays have the same length `n` (2 ≤ n ≤ 256), sampled at equal spacing from `a` (index 0) to `b` (index n−1):
+  sample `i` is at `distance_km × i / (n − 1)`. Values in metres, one decimal.
+  - `ground_m`: DEM elevation (same GLO-30 + `GridTerrain` interpolation as the model).
+  - `bulge_m`: effective Earth-curvature rise `d1·d2 / (2·k·R)`; the chart draws terrain as `ground_m + bulge_m`.
+  - `fresnel_r1_m`: first Fresnel zone radius `sqrt(λ·d1·d2/d)`; 0 at both ends.
+- Line of sight runs from `ground_m[0] + antenna_a_m` to `ground_m[n−1] + antenna_b_m`.
+- `line_of_sight`, `fresnel_clearance`, `diffraction_loss_db` are the model's values **for this grid-cell path**, computed
+  by the same function the model uses. They can differ from the same link's numbers in `links/residuals`, which come
+  from exact positions. The UI says so.
+- Profiles exist for topology links whose two nodes have locations in **different** cells (same-cell links have no
+  meaningful profile).
+- **Storage (sharded, Console Phase 6):** `summaries/region={REGION}/profiles/{s}.json` for `s` in `0`–`9`, `A`–`F`, where
+  `s` is the first character of the pair's **smaller** id (ids upper-cased, compared as strings). Each shard is
+  `{"meta", "model", "params", "profiles": [<profile>, ...]}` holding only pairs of that shard; all 16 are always
+  written (an empty list is valid), with identical `meta`/`model`/`params`. Shards are never served whole.
+  Why: at 5× the SEA fixture (3,747 profiles) a single file was 9.1 MB, over the 8 MB summary cap.
+  The shards are **not** even: the smaller of two random hex digits leans low, so shard `s` gets about (31 − 2s)/256
+  of the pairs (shard 0 ≈ 12 %, shard F ≈ 0.4 %). Measured at 5×: 11.7 KB – 1.57 MB per shard, shard 1 the largest.
+  The busiest shard reaches the cap at about 19,000 profiles (≈ 5× the 5× run). A rule that spreads evenly (XOR of
+  the two ids' first hex digits, still order-independent) would raise that about threefold; it is a recorded
+  follow-up, not done.
+- All profile fields are required and non-null; a pair stored in the wrong shard makes the shard invalid.
+  Ids in the URL match case-insensitively. Written as compact JSON. An oversized or invalid shard is refused whole
+  (lookups in that shard 503, others unaffected), never truncated.
+- `/regions` lists `profiles` when all 16 shards exist and are valid.
 
 ### `GET /api/v1/regions/{region}/placement`
 Where the next repeater would help most. Source: the nightly placement job (Phase 5).
@@ -177,8 +232,81 @@ Query: `top` (default 10, max 50).
 - `spofs_removed` is computed only for the `method.spofs_checked_top` cells with the most pairs gained; other cells show `[]` (never over-claims).
 - `method.dem` is `"Copernicus GLO-30"` or `"flat (no DEM)"`, as in residuals.
 
-### `GET /` and `/static/*`
-The Leaflet map page (Phase 5). It only calls the endpoints above.
+### `GET /api/v1/regions/{region}/terrain.json`
+Metadata for the 3D map's elevation tiles. Source: the terrain job (`meshtwin-analytics terrain-tiles`, Console
+Phase 2). The tiles are sampled from **the same GLO-30 mosaic and bilinear interpolation (`GridTerrain`) the
+propagation model uses**, so the 3D map shows the ground the model saw.
+```json
+{
+  "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-11T03:00:00Z",
+           "window": null, "source": "terrain-job"},
+  "encoding": "mapbox", "tile_size": 256, "minzoom": 8, "maxzoom": 12,
+  "bounds": [-122.6, 47.3, -121.8, 47.9],
+  "dem": "Copernicus GLO-30",
+  "tiles": 112
+}
+```
+- `meta.window` is `null`: terrain isn't data from a time window. This is the only summary where it may be null.
+- `bounds` is `[west, south, east, north]` in degrees, snapped **outward** to 0.1°. It's the coverage box, not a node location.
+- `encoding: "mapbox"` (Terrain-RGB): `elevation_m = -10000 + (R × 65536 + G × 256 + B) × 0.1`.
+- `tiles` is the number of PNG tiles written (for the readiness check and benchmarks).
+- `dem` is always `"Copernicus GLO-30"`: the job refuses to run without a DEM rather than publish flat tiles.
+
+### `GET /api/v1/regions/{region}/terrain/{z}/{x}/{y}.png`
+One 256 × 256 Terrain-RGB PNG in XYZ (slippy-map, Web Mercator) numbering. Stored at
+`summaries/region={REGION}/terrain/{z}/{x}/{y}.png`.
+- `z`, `x`, `y` are decimal integers with `0 ≤ z ≤ 14` and `0 ≤ x, y < 2^z`; anything else is `400 bad_request`.
+- A tile outside `bounds` or the zoom range is `404 not_found` (the map then shows no relief there; it is not an error for the UI).
+- The API serves the bytes as `image/png` only after checking the PNG signature and a 1 MB size cap. Same `ETag`
+  rule as JSON; `Cache-Control: max-age=3600` (terrain changes only when the DEM does).
+- Privacy: elevation tiles contain no node data. They are still limited to the region's bounds.
+
+### `GET /api/v1/status`
+Ingest health for the console's status strip (Console Phase 5). The API runs fixed PromQL instant queries against
+the Prometheus it is configured with (`-prometheus-url` / `PROMETHEUS_URL`) and returns the numbers. Not per region.
+```json
+{
+  "as_of": "2026-11-11T21:30:00Z",
+  "ingest": {
+    "messages_per_s": 10.4,
+    "sync_lag_s": 412,
+    "spool_bytes": 1610000000,
+    "spool_max_bytes": 2147483648,
+    "storage_up": false,
+    "mqtt_connected": true
+  }
+}
+```
+| field | PromQL |
+|---|---|
+| `messages_per_s` | `sum(rate(meshtwin_ingest_messages_total{result="ok"}[5m]))` |
+| `sync_lag_s` | `max(meshtwin_ingest_spool_oldest_age_seconds)` |
+| `spool_bytes` | `sum(meshtwin_ingest_spool_bytes)` |
+| `spool_max_bytes` | `sum(meshtwin_ingest_spool_max_bytes)` |
+| `storage_up` | `min(meshtwin_ingest_storage_up)`; true when the value is 1 (any ingester down → false) |
+| `mqtt_connected` | `min(meshtwin_ingest_mqtt_connected)`; true when the value is 1 |
+- Each field is `null` when its query returns no series (e.g. no ingester scraped yet). Numbers keep one decimal for
+  rates and seconds, integers for bytes. `as_of` is when the API ran the queries.
+- `503 not_ready` when no Prometheus URL is configured or Prometheus can't be reached or answers with an error
+  (all six queries succeed or the whole response is 503: partial nulls would look like "no series").
+- The `== 1` comparison happens in the API, not in PromQL: PromQL's `==` filters, so `min(x) == 1` would return no
+  series (null) for a down ingester instead of false.
+- The queries are constants in the API: nothing from the request reaches Prometheus. Results are cached for 10 s
+  (`Cache-Control: max-age=10`), so any number of open consoles costs Prometheus at most six queries per 10 s.
+- Privacy: aggregate counters only, no node or location data.
+
+### `GET /`, `/assets/*`, `/basemap/{name}.pmtiles`
+The console (`web/`, Console Phase 6) replaces the Leaflet map page. It only calls the endpoints above.
+- `/` serves `index.html` with `Cache-Control: no-cache`; `/assets/*` are Vite's content-hashed files with
+  `Cache-Control: public, max-age=31536000, immutable`. Both come from `web/dist` embedded in the binary at image
+  build time (`-static-dir` overrides it for development and e2e builds).
+- `/basemap/{name}.pmtiles` serves a Protomaps extract from `-basemap-dir` / `BASEMAP_DIR` with HTTP Range support
+  (PMTiles reads byte ranges). `name` is `[a-z0-9-]{1,32}`. Off when the directory isn't set: 404, and the console
+  falls back to hillshade only.
+- CSP for all responses: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:;
+  font-src 'self'; connect-src 'self'; worker-src blob:; child-src blob:; frame-ancestors 'none'; base-uri 'none';
+  form-action 'none'`. MapLibre runs its tile workers from `blob:` URLs and decodes images to `blob:`; nothing loads
+  from another origin.
 
 ## Versioning
 Additive changes (new fields) keep `v1`; clients ignore unknown fields. Removing or renaming a field, or

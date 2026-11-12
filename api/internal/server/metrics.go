@@ -26,6 +26,10 @@ var (
 		Name: "meshtwin_api_summary_validation_failures_total",
 		Help: "Summary files rejected by the privacy/contract checks (not served), by summary name.",
 	}, []string{"summary"})
+	promFailures = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "meshtwin_api_status_query_failures_total",
+		Help: "Refreshes of GET /api/v1/status that failed because Prometheus errored or timed out.",
+	})
 	// Only updated when a summary is (re)loaded, i.e. on a request after the
 	// cache TTL; GET /api/v1/regions loads every listed summary, so polling it refreshes all.
 	summaryGenerated = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -48,11 +52,11 @@ func recordGenerated(region, name string, validated []byte) {
 	}
 }
 
-// cspHeader allows the page's own files, Leaflet from unpkg and OSM tiles;
-// nothing else can load or run.
-const cspHeader = "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' https://unpkg.com; " +
-	"img-src 'self' data: https://unpkg.com https://tile.openstreetmap.org; connect-src 'self'; " +
-	"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+// cspHeader is the contract's policy: everything from this origin only.
+// MapLibre runs its workers from blob: URLs and decodes images to blob:.
+const cspHeader = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " +
+	"font-src 'self'; connect-src 'self'; worker-src blob:; child-src blob:; frame-ancestors 'none'; " +
+	"base-uri 'none'; form-action 'none'"
 
 type statusWriter struct {
 	http.ResponseWriter

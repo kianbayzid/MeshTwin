@@ -12,3 +12,13 @@ testdata/recorded/raw/
 /ingest/meshgen
 /ingest/meshdecode
 /ingest/anonymize
+
+# Frontend
+/web/node_modules/
+/web/dist/
+/.playwright-mcp/
+/web/public/basemap/
+/web/*.tsbuildinfo
+/web/dist-e2e/
+/web/test-results/
+/web/playwright-report/

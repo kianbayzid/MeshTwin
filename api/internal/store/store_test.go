@@ -37,6 +37,17 @@ func TestParseKey(t *testing.T) {
 		{"summaries/SEA/topology.json", "", "", false},
 		{"results/region=SEA/topology.json", "", "", false},
 		{"summaries/region=SEA/x/topology.json", "", "", false},
+		{"summaries/region=SEA/terrain.json", "SEA", "terrain", true},
+		{"summaries/region=SEA/profiles.json", "", "", false}, // profiles are stored only as shards
+		{"summaries/region=SEA/profiles/0.json", "SEA", "profiles/0", true},
+		{"summaries/region=SEA/profiles/F.json", "SEA", "profiles/F", true},
+		{"summaries/region=SEA/profiles/f.json", "", "", false},
+		{"summaries/region=SEA/profiles/G.json", "", "", false},
+		{"summaries/region=SEA/profiles/00.json", "", "", false},
+		{"summaries/region=SEA/profiles/.json", "", "", false},
+		{"summaries/region=SEA/profiles/0/1.json", "", "", false},
+		{"summaries/region=SEA/terrain/0.json", "", "", false},
+		{"summaries/region=SEA/terrain/8/40/89.png", "", "", false}, // tiles are not summaries
 	} {
 		region, name, ok := parseKey(tc.key)
 		if region != tc.region || name != tc.name || ok != tc.ok {
@@ -60,6 +71,10 @@ func TestLocal(t *testing.T) {
 	write("summaries/region=SEA/topology.json", `{"x":1}`)
 	write("summaries/region=SEA/notes.txt", "ignored")
 	write("summaries/region=PDX/placement.json", "{}")
+	write("summaries/region=SEA/terrain/8/40/89.png", "png")
+	write("summaries/region=SEA/profiles/A.json", `{"s":"A"}`)
+	write("summaries/region=SEA/profiles/0.json", "{}")
+	write("summaries/region=SEA/profiles.json", "{}") // the old unsharded file is ignored
 	l := Local{Root: root}
 	ctx := context.Background()
 
@@ -70,8 +85,17 @@ func TestLocal(t *testing.T) {
 	if _, err := l.Get(ctx, "SEA", "placement"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing summary: err = %v, want ErrNotFound", err)
 	}
+	if got, err := l.Get(ctx, "SEA", ProfileShard('A')); err != nil || string(got) != `{"s":"A"}` {
+		t.Errorf("Get shard A = %q, %v", got, err)
+	}
+	if got, err := l.Tile(ctx, "SEA", 8, 40, 89); err != nil || string(got) != "png" {
+		t.Errorf("Tile = %q, %v", got, err)
+	}
+	if _, err := l.Tile(ctx, "SEA", 8, 40, 90); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing tile: err = %v, want ErrNotFound", err)
+	}
 	list, err := l.List(ctx)
-	want := map[string][]string{"SEA": {"topology", "residuals"}, "PDX": {"placement"}}
+	want := map[string][]string{"SEA": {"topology", "residuals", "profiles/0", "profiles/A"}, "PDX": {"placement"}}
 	if err != nil || !reflect.DeepEqual(list, want) {
 		t.Errorf("List = %v, %v; want %v", list, err, want)
 	}
@@ -94,6 +118,26 @@ func TestSizeCap(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, err := Local{Root: root}.Get(context.Background(), "SEA", "topology")
+		if !errors.Is(err, tc.err) || (err == nil && len(b) != tc.size) {
+			t.Errorf("size %d: len %d, err %v; want err %v", tc.size, len(b), err, tc.err)
+		}
+	}
+}
+
+func TestTileSizeCap(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		err  error
+	}{{MaxTileBytes, nil}, {MaxTileBytes + 1, ErrTooLarge}} {
+		root := t.TempDir()
+		dir := filepath.Join(root, "summaries", "region=SEA", "terrain", "0", "0")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "0.png"), make([]byte, tc.size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		b, err := Local{Root: root}.Tile(context.Background(), "SEA", 0, 0, 0)
 		if !errors.Is(err, tc.err) || (err == nil && len(b) != tc.size) {
 			t.Errorf("size %d: len %d, err %v; want err %v", tc.size, len(b), err, tc.err)
 		}

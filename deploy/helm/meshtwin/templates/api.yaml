@@ -1,5 +1,5 @@
 {{- $c := dict "root" $ "component" "api" }}
-# Read-only REST API + map. Stateless (summaries live in S3), so 2 replicas.
+# Read-only REST API + web console. Stateless (summaries live in S3), so 2 replicas.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,7 +19,16 @@ spec:
         - name: api
           image: {{ .Values.images.api }}
           imagePullPolicy: {{ .Values.pullPolicy }}
-          env: {{- include "meshtwin.s3Env" . | nindent 12 }}
+          env:
+            {{- include "meshtwin.s3Env" . | nindent 12 }}
+            # Feeds GET /api/v1/status (the console's status strip). No NetworkPolicy
+            # selects Prometheus, so API -> Prometheus is allowed.
+            - name: PROMETHEUS_URL
+              value: http://{{ .Release.Name }}-prometheus:9090
+            {{- if .Values.api.basemap.hostPath }}
+            - name: BASEMAP_DIR
+              value: /basemap
+            {{- end }}
           ports:
             - {name: http, containerPort: 8080}
           livenessProbe:
@@ -36,6 +45,15 @@ spec:
             timeoutSeconds: 5
           resources: {{- toYaml .Values.api.resources | nindent 12 }}
           securityContext: {{- include "meshtwin.containerSecurity" . | nindent 12 }}
+          {{- with .Values.api.basemap.hostPath }}
+          volumeMounts:
+            - {name: basemap, mountPath: /basemap, readOnly: true}
+      # shortcut: hostPath is node-local, fine for single-node k3d; on a real
+      # cluster use a ReadOnlyMany PVC (or bake the file into an image) instead.
+      volumes:
+        - name: basemap
+          hostPath: {path: {{ . | quote }}, type: Directory}
+          {{- end }}
 ---
 # NodePort: k3d maps a host port to it (deploy/k3d/cluster.yaml); no ingress needed.
 apiVersion: v1

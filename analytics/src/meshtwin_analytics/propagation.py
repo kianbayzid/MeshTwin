@@ -11,7 +11,7 @@ from typing import Protocol
 import numpy as np
 
 from .geo import EARTH_RADIUS_KM, haversine_km
-from .terrain import Terrain
+from .terrain import Array, Terrain
 
 # Demodulation SNR floor per spreading factor: Semtech SX1262 datasheet Rev 1.2, Table 6-1.
 DEMOD_SNR_FLOOR_DB: dict[int, float] = {
@@ -88,6 +88,19 @@ class LinkPrediction:
     diffraction_loss_db: float
 
 
+@dataclass(frozen=True)
+class PathGeometry:
+    """One path's terrain profile (n samples, a at index 0) and its knife-edge result."""
+
+    distance_km: float
+    ground_m: Array
+    bulge_m: Array  # effective Earth-curvature rise; 0 at both ends
+    fresnel_r1_m: Array  # first Fresnel zone radius; 0 at both ends
+    line_of_sight: bool
+    fresnel_clearance: float
+    diffraction_loss_db: float
+
+
 class PropagationModel(Protocol):
     name: str
     version: str
@@ -122,39 +135,53 @@ class FsplKnifeEdge:
         self.radio = radio
         self.profiles = 0  # predictions made, for the profiles/second benchmark
 
-    def predict(self, a: Site, b: Site) -> LinkPrediction:
-        self.profiles += 1
+    def geometry(self, a: Site, b: Site, max_points: int = MAX_PROFILE_POINTS) -> PathGeometry:
+        """The terrain profile from a to b and its knife-edge result.
+
+        The one source of path geometry: `predict` and the published profiles
+        (compare.profile) both call it, so the chart and the model cannot drift apart.
+        """
         d_km = max(haversine_km(a.lat, a.lon, b.lat, b.lon), MIN_DISTANCE_KM)
         d = d_km * 1000
-        n = min(MAX_PROFILE_POINTS, max(3, math.ceil(d / PROFILE_STEP_M) + 1))
+        n = min(max_points, max(3, math.ceil(d / PROFILE_STEP_M) + 1))
         # A straight line in lat/lon is within metres of the great circle below ~50 km.
         t = np.linspace(0.0, 1.0, n)
         ground = self.terrain.elevation_m(a.lat + t * (b.lat - a.lat), a.lon + t * (b.lon - a.lon))
 
-        # Interior points only: the endpoints are the antennas themselves.
-        ti = t[1:-1]
-        d1, d2 = ti * d, (1 - ti) * d
+        # d1 or d2 is exactly 0 at the ends, so bulge and r1 are 0 there.
+        d1, d2 = t * d, (1 - t) * d
         start, end = ground[0] + a.height_m, ground[-1] + b.height_m
-        ray = start + (end - start) * ti
+        ray = start + (end - start) * t
         bulge = d1 * d2 / (2 * K_FACTOR * EARTH_RADIUS_KM * 1000)
-        h = ground[1:-1] + bulge - ray  # obstacle height above the ray (> 0 blocks)
-
         wavelength = SPEED_OF_LIGHT_M_S / (self.radio.freq_mhz * 1e6)
         fresnel_r1 = np.sqrt(wavelength * d1 * d2 / d)
-        clearance = -h / fresnel_r1
-        worst = float(np.min(clearance))
+
+        # Interior points only: the endpoints are the antennas themselves.
+        h = (ground + bulge - ray)[1:-1]  # obstacle height above the ray (> 0 blocks)
+        worst = float(np.min(-h / fresnel_r1[1:-1]))
         # ITU-R P.526-16 Eq. (26): v = h sqrt(2 (d1 + d2) / (lambda d1 d2)) = sqrt(2) h / r1,
         # so the point with the largest v is the one with the smallest Fresnel clearance.
-        diffraction = knife_edge_db(-math.sqrt(2) * worst)
-
-        r = self.radio
-        loss = fspl_db(d_km, r.freq_mhz) + diffraction
-        snr = r.tx_dbm + 2 * r.antenna_gain_dbi - loss - r.noise_floor_dbm
-        return LinkPrediction(
+        return PathGeometry(
             distance_km=d_km,
-            path_loss_db=loss,
-            predicted_snr_db=snr,
+            ground_m=ground,
+            bulge_m=bulge,
+            fresnel_r1_m=fresnel_r1,
             line_of_sight=bool(np.all(h <= 0)),
             fresnel_clearance=worst,
-            diffraction_loss_db=diffraction,
+            diffraction_loss_db=knife_edge_db(-math.sqrt(2) * worst),
+        )
+
+    def predict(self, a: Site, b: Site) -> LinkPrediction:
+        self.profiles += 1
+        g = self.geometry(a, b)
+        r = self.radio
+        loss = fspl_db(g.distance_km, r.freq_mhz) + g.diffraction_loss_db
+        snr = r.tx_dbm + 2 * r.antenna_gain_dbi - loss - r.noise_floor_dbm
+        return LinkPrediction(
+            distance_km=g.distance_km,
+            path_loss_db=loss,
+            predicted_snr_db=snr,
+            line_of_sight=g.line_of_sight,
+            fresnel_clearance=g.fresnel_clearance,
+            diffraction_loss_db=g.diffraction_loss_db,
         )

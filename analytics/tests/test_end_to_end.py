@@ -13,12 +13,15 @@ import duckdb
 import pyarrow.parquet as pq
 import pytest
 
+from meshtwin_analytics import compare
 from meshtwin_analytics.cli import main
 from meshtwin_analytics.evaluate import evaluate, load_truth
 from meshtwin_analytics.geo import haversine_km, snap
 from meshtwin_analytics.pipeline import TopologyRun
 
 from .conftest import HASH1, HASH3, REPO
+
+SHARDS = "0123456789ABCDEF"
 
 FIXTURES = {"hash1": HASH1, "hash3": HASH3}
 
@@ -78,7 +81,7 @@ SUMMARIES = {
     "residuals": "propagation-job",
     "surprising": "propagation-job",
     "placement": "placement-job",
-}
+} | {f"profiles/{s}": "propagation-job" for s in SHARDS}
 
 
 @pytest.mark.parametrize("name", sorted(SUMMARIES))
@@ -209,10 +212,18 @@ def _conforms(got: Any, want: Any, path: str) -> list[str]:
 ENDPOINTS = {"residuals": "links/residuals", "surprising": "links/surprising"}
 
 
+def _contract_shape(name: str) -> dict[str, Any]:
+    if not name.startswith("profiles/"):
+        return _contract_example(ENDPOINTS.get(name, name))
+    # A profile shard is the profile endpoint's example with "profile" as a list "profiles".
+    ex = _contract_example("links/{a}/{b}/profile")
+    return {k: v for k, v in ex.items() if k != "profile"} | {"profiles": [ex["profile"]]}
+
+
 @pytest.mark.parametrize("name", sorted(SUMMARIES))
 def test_contract(out_dir: Path, name: str) -> None:
     doc = _summary(out_dir, name)
-    assert _conforms(doc, _contract_example(ENDPOINTS.get(name, name)), name) == []
+    assert _conforms(doc, _contract_shape(name), name) == []
     assert doc["meta"]["source"] == SUMMARIES[name]
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", doc["meta"]["window"]["to"])
 
@@ -279,3 +290,45 @@ def test_collisions_cost_something(run_hash1: TopologyRun, run_hash3: TopologyRu
     assert e1.ambiguous_hops / e1.hop_entries > 0.01
     assert e3.ambiguous_hops == 0
     assert run_hash1.cache_hit_rate > 0.8  # identical chains repeat: the memo pays off
+
+
+def test_profiles_cover_located_links(out_dir: Path) -> None:
+    """One profile per topology link with both ends located in different cells, in the
+    topology's orientation, sharing distance_km with residuals."""
+    topo = _summary(out_dir, "topology")
+    loc = {n["id"]: n["location"] for n in topo["nodes"]}
+    want = [
+        (lk["a"], lk["b"])
+        for lk in topo["links"]
+        if loc[lk["a"]] and loc[lk["b"]] and loc[lk["a"]] != loc[lk["b"]]
+    ]
+    shards = {s: _summary(out_dir, f"profiles/{s}") for s in SHARDS}
+    profs = [p for doc in shards.values() for p in doc["profiles"]]
+    # Each pair exactly once (sorted() would keep a duplicate; want.index raises on an extra).
+    assert sorted(((p["a"], p["b"]) for p in profs), key=want.index) == want and want
+    for s, doc in shards.items():
+        assert all(compare.profile_shard(p["a"], p["b"]) == s for p in doc["profiles"])
+        assert {k: v for k, v in doc.items() if k != "profiles"} == {
+            k: v for k, v in shards["0"].items() if k != "profiles"
+        }
+    assert shards["0"]["model"] == _summary(out_dir, "residuals")["model"]
+    assert shards["0"]["params"] == {"freq_mhz": 910.525, "k_factor": 1.333, "grid_deg": 0.01}
+    residuals = _summary(out_dir, "residuals")["links"]
+    residual_km = {(r["a"], r["b"]): r["distance_km"] for r in residuals}
+    for p in profs:
+        n = len(p["ground_m"])
+        assert 2 <= n <= 256 and len(p["bulge_m"]) == len(p["fresnel_r1_m"]) == n
+        for key in ("bulge_m", "fresnel_r1_m"):
+            assert p[key][0] == p[key][-1] == 0
+        assert p["ground_m"] == [0] * n  # fixtures run without a DEM
+        assert p["distance_km"] == residual_km.get((p["a"], p["b"]), p["distance_km"])
+
+
+def test_profiles_written_sharded_and_compact(out_dir: Path) -> None:
+    """All 16 shards, compact (the API refuses a summary over 8 MB), no single profiles.json."""
+    d = out_dir / "summaries" / "region=SEA"
+    assert sorted(f.name for f in (d / "profiles").iterdir()) == [f"{s}.json" for s in SHARDS]
+    assert not (d / "profiles.json").exists()
+    for s in SHARDS:
+        text = (d / "profiles" / f"{s}.json").read_text(encoding="utf-8")
+        assert "\n" not in text and ", " not in text and ": " not in text

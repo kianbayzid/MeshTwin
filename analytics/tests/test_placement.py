@@ -9,7 +9,9 @@ import pytest
 from meshtwin_analytics.geo import haversine_km, snap
 from meshtwin_analytics.placement import (
     Candidate,
+    base_state,
     grid_cells,
+    network_gain,
     on_land,
     predict_links,
     recommend,
@@ -125,6 +127,18 @@ def test_ranking_is_deterministic_and_scores_bounded() -> None:
     assert scores == sorted(scores, reverse=True)
     assert all(0.0 <= s <= 1.0 for s in scores)
     assert recommend(g, sites, cells, spofs, StepModel(), RADIO, top=5) == first[:5]
+
+
+def test_precomputed_base_gives_identical_gain() -> None:
+    """recommend() computes the base graph's state once; the result must not change."""
+    g, sites = _graph()
+    base = base_state(g)
+    cells = grid_cells([*POS.values(), FAR])
+    gains = [network_gain(g, predict_links(c, sites, StepModel(), RADIO)) for c in cells]
+    assert any(gained > 0 for gained, _ in gains)  # the test has teeth
+    for c, gain in zip(cells, gains, strict=True):
+        assert network_gain(g, predict_links(c, sites, StepModel(), RADIO), base) == gain
+    assert base_state(g) == base  # scoring candidates never touched the base graph
 
 
 def test_cells_are_snapped_grid_cells_padded_by_one() -> None:

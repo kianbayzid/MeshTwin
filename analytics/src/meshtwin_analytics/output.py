@@ -36,14 +36,22 @@ def write_all(run: TopologyRun, out_root: str) -> list[str]:
     return written + write_summaries(run.region, docs, out_root)
 
 
-def write_summaries(region: str, docs: dict[str, dict[str, Any]], out_root: str) -> list[str]:
-    """Writes summaries/region=<R>/<name>.json for each doc. Returns the paths."""
+def write_summaries(
+    region: str, docs: dict[str, dict[str, Any]], out_root: str, compact: bool = False
+) -> list[str]:
+    """Writes summaries/region=<R>/<name>.json for each doc (name may hold a '/', e.g.
+    "profiles/A"). Returns the paths.
+
+    compact: no whitespace, for big files (the API refuses a summary over 8 MB).
+    """
     fs, base = output_fs(out_root)
     d = f"{base}/summaries/region={region}"
-    fs.create_dir(d, recursive=True)
     written = []
     for name, doc in docs.items():
-        with fs.open_output_stream(f"{d}/{name}.json") as f:
-            f.write(json.dumps(doc, indent=2).encode())
-        written.append(f"{d}/{name}.json")
+        path = f"{d}/{name}.json"
+        fs.create_dir(path.rsplit("/", 1)[0], recursive=True)
+        with fs.open_output_stream(path) as f:
+            text = json.dumps(doc, separators=(",", ":")) if compact else json.dumps(doc, indent=2)
+            f.write(text.encode())
+        written.append(path)
     return written

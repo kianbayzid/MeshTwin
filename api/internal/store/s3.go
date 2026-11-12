@@ -29,23 +29,33 @@ func NewS3(endpoint, accessKey, secretKey, bucket string, useTLS bool) (*S3, err
 }
 
 func (s *S3) Get(ctx context.Context, region, name string) ([]byte, error) {
-	obj, err := s.client.GetObject(ctx, s.bucket, "summaries/region="+region+"/"+name+".json", minio.GetObjectOptions{})
+	return s.read(ctx, summaryKey(region, name), MaxBytes)
+}
+
+func (s *S3) Tile(ctx context.Context, region string, z, x, y int) ([]byte, error) {
+	return s.read(ctx, tileKey(region, z, x, y), MaxTileBytes)
+}
+
+func (s *S3) read(ctx context.Context, key string, limit int) ([]byte, error) {
+	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("get summary: %w", err)
+		return nil, fmt.Errorf("get %s: %w", key, err)
 	}
 	defer func() { _ = obj.Close() }() // read-only: a close error cannot lose data
-	b, err := readCapped(obj)
+	b, err := readCapped(obj, limit)
 	if minio.ToErrorResponse(err).Code == minio.NoSuchKey {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read summary: %w", err)
+		return nil, fmt.Errorf("read %s: %w", key, err)
 	}
 	return b, nil
 }
 
 func (s *S3) List(ctx context.Context) (map[string][]string, error) {
 	m := map[string][]string{}
+	// shortcut: the recursive listing also walks every terrain tile (parseKey drops them);
+	// fine at ~100 tiles per region, list per region without recursion if that grows.
 	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: "summaries/", Recursive: true}) {
 		if obj.Err != nil {
 			return nil, fmt.Errorf("list summaries: %w", obj.Err)

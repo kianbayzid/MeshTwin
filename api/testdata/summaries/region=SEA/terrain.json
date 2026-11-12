@@ -1,0 +1,8 @@
+{
+  "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-11T03:00:00Z",
+           "window": null, "source": "terrain-job"},
+  "encoding": "mapbox", "tile_size": 256, "minzoom": 8, "maxzoom": 8,
+  "bounds": [-122.6, 47.3, -121.8, 47.9],
+  "dem": "Copernicus GLO-30",
+  "tiles": 1
+}

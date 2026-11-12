@@ -186,3 +186,122 @@ def test_dem_without_located_nodes_falls_back_to_flat(
     terrain, dem = _terrain(replace(run_hash1, nodes=unlocated), tmp_path)
     assert isinstance(terrain, FlatTerrain)
     assert dem == "flat (no DEM)"
+
+
+# --- published link profiles -------------------------------------------------------------
+
+
+def _hilly() -> GridTerrain:
+    """A tilted plane with a ridge, so any shift in position changes the ground profile."""
+    lat = 47.2 - np.arange(301)[:, None] * 0.001
+    lon = -122.15 + np.arange(301)[None, :] * 0.001
+    z = _plane(lat, lon) + np.where(np.abs(lat - 47.05) < 0.002, 150.0, 0.0)
+    return GridTerrain(z, 47.2, -122.15, 0.001, 0.001)
+
+
+@pytest.mark.parametrize("km", [2, 10, 20])
+def test_geometry_is_what_predict_uses(km: float) -> None:
+    model = FsplKnifeEdge(_hilly(), RADIO)
+    a, b = _north(km, 10)
+    g, p = model.geometry(a, b), model.predict(a, b)
+    assert (g.line_of_sight, g.fresnel_clearance, g.diffraction_loss_db) == (
+        p.line_of_sight,
+        p.fresnel_clearance,
+        p.diffraction_loss_db,
+    )
+    assert g.distance_km == p.distance_km
+    for arr in (g.bulge_m, g.fresnel_r1_m):
+        assert arr[0] == arr[-1] == 0
+    capped = model.geometry(a, b, compare.PROFILE_MAX_POINTS)
+    assert 3 <= len(capped.ground_m) <= compare.PROFILE_MAX_POINTS
+
+
+def test_profile_reproduces_predict_on_the_snapped_sites() -> None:
+    model = FsplKnifeEdge(_hilly(), RADIO)
+    a, b = (
+        Node("aa" * 32, "repeater", lat=47.004, lon=-122.0),
+        Node("bb" * 32, lat=47.1, lon=-122.0),
+    )
+    prof = compare.profile(model, a, b, RADIO)
+    sa, sb = compare.public_site(a, RADIO), compare.public_site(b, RADIO)
+    assert prof is not None and sa is not None and sb is not None
+    p = model.predict(sa, sb)
+    assert prof["line_of_sight"] == p.line_of_sight
+    assert prof["fresnel_clearance"] == round(p.fresnel_clearance, 2)
+    assert prof["diffraction_loss_db"] == round(p.diffraction_loss_db, 1)
+    assert prof["distance_km"] == compare.public_distance_km(a, b)
+    assert (prof["antenna_a_m"], prof["antenna_b_m"]) == (10.0, 2.0)
+    n = len(prof["ground_m"])
+    assert 2 <= n <= compare.PROFILE_MAX_POINTS
+    assert len(prof["bulge_m"]) == len(prof["fresnel_r1_m"]) == n
+    for key in ("bulge_m", "fresnel_r1_m"):
+        assert prof[key][0] == prof[key][-1] == 0
+    assert prof["ground_m"][0] == round(
+        float(_hilly().elevation_m(np.array([47.0]), np.array([-122.0]))[0]), 1
+    )
+
+
+def test_profile_never_uses_exact_positions() -> None:
+    """Privacy: nodes at different exact positions inside the same two cells publish the
+    identical profile, although their exact paths have different ground under them."""
+    model = FsplKnifeEdge(_hilly(), RADIO)
+    exact1 = Site(47.0012, -121.9961, 2), Site(47.0988, -122.0049, 2)
+    exact2 = Site(46.9951, -122.0043, 2), Site(47.1032, -121.9953, 2)
+
+    def nodes(sites: tuple[Site, Site]) -> tuple[Node, Node]:
+        return Node("aa" * 32, lat=sites[0].lat, lon=sites[0].lon), Node(
+            "bb" * 32, lat=sites[1].lat, lon=sites[1].lon
+        )
+
+    p1 = compare.profile(model, *nodes(exact1), RADIO)
+    assert p1 is not None and p1 == compare.profile(model, *nodes(exact2), RADIO)
+    g1, g2 = (model.geometry(*s, compare.PROFILE_MAX_POINTS) for s in (exact1, exact2))
+    assert not np.array_equal(g1.ground_m, g2.ground_m)  # the test has teeth
+
+
+def test_no_profile_for_same_cell_or_unlocated() -> None:
+    model = FsplKnifeEdge(FlatTerrain(), RADIO)
+    a = Node("aa" * 32, lat=47.0012, lon=-122.0)
+    assert compare.profile(model, a, Node("bb" * 32, lat=47.0031, lon=-122.004), RADIO) is None
+    assert compare.profile(model, a, Node("bb" * 32), RADIO) is None
+
+
+# --- profile shards (docs/api-contract.md "Storage (sharded, Console Phase 6)") ----------
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "shard"),
+    [
+        ("A1B2C3D4", "9F000000", "9"),
+        ("9f000000", "a1b2c3d4", "9"),
+        # Raw comparison would pick "B0" ('B' < 'a'); upper-cased, "A0" is smaller.
+        ("a0", "B0", "A"),
+        ("B0", "a0", "A"),
+        ("7f", "e3", "7"),  # 2-char hop-hash placeholders
+        ("f0", "fe", "F"),
+    ],
+)
+def test_profile_shard(a: str, b: str, shard: str) -> None:
+    assert compare.profile_shard(a, b) == shard
+
+
+def test_profile_shard_refuses_non_hex() -> None:
+    with pytest.raises(ValueError):
+        compare.profile_shard("zz", "zy")
+
+
+def test_shard_profiles_partitions_the_list() -> None:
+    ids = ["0a", "1B", "a0", "B0", "c3", "D4", "e5", "Ff", "7f", "e3", "33", "9f"]
+    rows = [{"a": a, "b": b, "n": i} for i, (a, b) in enumerate(itertools.combinations(ids, 2))]
+    doc = {"meta": {"region": "SEA"}, "model": {"name": "m"}, "params": {"k": 1}, "profiles": rows}
+    shards = compare.shard_profiles(doc)
+    assert list(shards) == [f"profiles/{s}" for s in "0123456789ABCDEF"]
+    assert shards["profiles/2"]["profiles"] == []  # empty shards are still written
+    for name, sd in shards.items():
+        assert {k: v for k, v in sd.items() if k != "profiles"} == {
+            k: v for k, v in doc.items() if k != "profiles"
+        }
+        assert all(compare.profile_shard(p["a"], p["b"]) == name[-1] for p in sd["profiles"])
+    union = [p for sd in shards.values() for p in sd["profiles"]]
+    assert sorted(union, key=lambda p: p["n"]) == rows  # each exactly once, nothing lost
+    assert doc["profiles"] is rows and len(rows) == 66  # input untouched

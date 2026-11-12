@@ -43,11 +43,17 @@ import (
 //   - distance_km has at most one decimal (0.1 km, from snapped cells);
 //   - role is one of the contract's roles, and only repeaters and rooms
 //     (named public infrastructure) may have a non-null name;
-//   - meta.schema_version is 1 and meta.region matches the requested region.
+//   - meta.schema_version is 1 and meta.region matches the requested region;
+//   - meta.window is an object, except for terrain, where it is null;
+//   - terrain: see checkTerrain; profiles (shards): see checkProfiles.
 //
 // Duplicate keys are not rejected: the decoder keeps the last one, that is the
 // value checked, and it is the only one re-encoded and served.
+//
+// name may be a profiles shard ("profiles/0"): it is checked as profiles, and
+// every pair must belong to that shard.
 func validate(region, name string, data []byte) ([]byte, error) {
+	name, shard, _ := strings.Cut(name, "/")
 	paths, ok := allowed[name]
 	if !ok {
 		return nil, fmt.Errorf("no allow-list for summary %q", name)
@@ -73,6 +79,18 @@ func validate(region, name string, data []byte) ([]byte, error) {
 	}
 	for k, v := range doc {
 		if err := walkKey(paths, "", k, v); err != nil {
+			return nil, err
+		}
+	}
+	if name == "terrain" {
+		if err := checkTerrain(doc); err != nil {
+			return nil, err
+		}
+	} else if meta["window"] == nil {
+		return nil, errors.New("meta.window is missing or null (only terrain has no window)")
+	}
+	if name == "profiles" {
+		if err := checkProfiles(doc, shard); err != nil {
 			return nil, err
 		}
 	}
@@ -232,6 +250,143 @@ func checkObject(path string, o map[string]any) error {
 		return fmt.Errorf("%s: name set for role %v (only repeater and room may have one)", path, o["role"])
 	}
 	return nil
+}
+
+// checkTerrain checks terrain.json beyond its shape: the values the map needs
+// to request tiles, and bounds that are a coarse 0.1° box, not a point.
+func checkTerrain(doc map[string]any) error {
+	if doc["encoding"] != "mapbox" {
+		return fmt.Errorf("encoding = %v, want mapbox", doc["encoding"])
+	}
+	if doc["tile_size"] != json.Number("256") {
+		return fmt.Errorf("tile_size = %v, want 256", doc["tile_size"])
+	}
+	if s, _ := doc["dem"].(string); s == "" {
+		return fmt.Errorf("dem = %v, want the DEM's name", doc["dem"])
+	}
+	minZ, maxZ := number(doc["minzoom"]), number(doc["maxzoom"])
+	if !isInt(doc["minzoom"]) || !isInt(doc["maxzoom"]) || !(0 <= minZ && minZ <= maxZ && maxZ <= 14) {
+		return fmt.Errorf("minzoom = %v, maxzoom = %v: want integers with 0 <= minzoom <= maxzoom <= 14", doc["minzoom"], doc["maxzoom"])
+	}
+	if !isInt(doc["tiles"]) || !(number(doc["tiles"]) >= 0) {
+		return fmt.Errorf("tiles = %v is not a non-negative integer", doc["tiles"])
+	}
+	b, _ := doc["bounds"].([]any)
+	if len(b) != 4 {
+		return fmt.Errorf("bounds = %v, want [west, south, east, north]", doc["bounds"])
+	}
+	for _, v := range b {
+		if !maxDecimals(v, 1) {
+			return fmt.Errorf("bounds has %v, not on the 0.1° grid", v)
+		}
+	}
+	w, s, e, n := number(b[0]), number(b[1]), number(b[2]), number(b[3])
+	if !(-180 <= w && w < e && e <= 180 && -90 <= s && s < n && n <= 90) { // !(...) also rejects NaN
+		return fmt.Errorf("bounds = %v: want -180 <= west < east <= 180, -90 <= south < north <= 90", doc["bounds"])
+	}
+	return nil
+}
+
+// checkProfiles checks a profiles shard beyond its shape. The allow-list already
+// rejects any lat/lon key; these checks make every value the chart draws
+// present, finite and bounded, each pair appear once, and (when shard is set)
+// in its own shard, so the route's lookup by pair is unambiguous.
+func checkProfiles(doc map[string]any, shard string) error {
+	p, _ := doc["params"].(map[string]any)
+	if f := number(p["freq_mhz"]); !(f >= 100 && f <= 6000) { // !(...) also rejects NaN and a missing value
+		return fmt.Errorf("params.freq_mhz = %v, want 100-6000", p["freq_mhz"])
+	}
+	if k := number(p["k_factor"]); !(k >= 0.5 && k <= 5) {
+		return fmt.Errorf("params.k_factor = %v, want 0.5-5", p["k_factor"])
+	}
+	if g, _ := p["grid_deg"].(json.Number); g != "0.01" {
+		return fmt.Errorf("params.grid_deg = %v, want 0.01", p["grid_deg"])
+	}
+	list, ok := doc["profiles"].([]any)
+	if !ok {
+		return errors.New("profiles is missing or not a list")
+	}
+	seen := map[[2]string]bool{}
+	for i, v := range list {
+		o, _ := v.(map[string]any)
+		if err := checkProfile(o); err != nil {
+			return fmt.Errorf("profiles[%d]: %w", i, err)
+		}
+		key := pairKey(o["a"].(string), o["b"].(string)) // checkProfile made both strings
+		if shard != "" && key[0][:1] != shard {
+			return fmt.Errorf("profiles[%d]: pair %s-%s belongs in shard %s, not %s", i, key[0], key[1], key[0][:1], shard)
+		}
+		if seen[key] {
+			return fmt.Errorf("profiles[%d]: duplicate pair %s-%s", i, key[0], key[1])
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// profileArrays are the per-sample series and the bounds on their values (m).
+var profileArrays = []struct {
+	key    string
+	lo, hi float64
+}{{"ground_m", -500, 9000}, {"bulge_m", 0, 10000}, {"fresnel_r1_m", 0, 10000}}
+
+func checkProfile(o map[string]any) error {
+	if o == nil {
+		return errors.New("not an object")
+	}
+	a, _ := o["a"].(string)
+	b, _ := o["b"].(string)
+	if !nodeID(o["a"]) || !nodeID(o["b"]) || strings.EqualFold(a, b) {
+		return fmt.Errorf("a = %v, b = %v: want two different 2-8 hex node ids", o["a"], o["b"])
+	}
+	if d := number(o["distance_km"]); !(d >= 0) || !maxDecimals(o["distance_km"], 1) {
+		return fmt.Errorf("distance_km = %v, want >= 0 with at most one decimal", o["distance_km"])
+	}
+	for _, k := range []string{"antenna_a_m", "antenna_b_m"} {
+		if h := number(o[k]); !(h >= 0 && h <= 200) {
+			return fmt.Errorf("%s = %v, want 0-200", k, o[k])
+		}
+	}
+	n := 0
+	for i, arr := range profileArrays {
+		vals, _ := o[arr.key].([]any)
+		if i == 0 {
+			n = len(vals)
+		}
+		if len(vals) != n || n < 2 || n > 256 {
+			return fmt.Errorf("%s has %d samples; want 2-256, the same for every array", arr.key, len(vals))
+		}
+		for _, v := range vals {
+			if x := number(v); !(x >= arr.lo && x <= arr.hi) || !maxDecimals(v, 1) {
+				return fmt.Errorf("%s has %v, want %g to %g with at most one decimal", arr.key, v, arr.lo, arr.hi)
+			}
+		}
+	}
+	if _, ok := o["line_of_sight"].(bool); !ok {
+		return fmt.Errorf("line_of_sight = %v, want true or false", o["line_of_sight"])
+	}
+	for _, k := range []string{"fresnel_clearance", "diffraction_loss_db"} {
+		if x := number(o[k]); math.IsNaN(x) || math.IsInf(x, 0) {
+			return fmt.Errorf("%s = %v, want a finite number", k, o[k])
+		}
+	}
+	return nil
+}
+
+// pairKey is the order-free key of a link: upper-cased (hex ids are
+// case-insensitive) and sorted, so a-b and b-a are the same pair.
+func pairKey(a, b string) [2]string {
+	a, b = strings.ToUpper(a), strings.ToUpper(b)
+	if b < a {
+		a, b = b, a
+	}
+	return [2]string{a, b}
+}
+
+// isInt reports whether v is a JSON number written as an integer.
+func isInt(v any) bool {
+	n, ok := v.(json.Number)
+	return ok && !strings.ContainsAny(string(n), ".eE")
 }
 
 // maxDecimals reports whether v is a JSON number with at most n decimals,

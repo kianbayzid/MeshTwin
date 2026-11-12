@@ -1,8 +1,10 @@
-"""Command line: `meshtwin-analytics topology|propagation|placement|evaluate|fetch-dem ...`."""
+"""Command line: `meshtwin-analytics <command> ...` (topology, propagation, placement, evaluate,
+fetch-dem, terrain-tiles)."""
 
 import argparse
 import json
 import logging
+import math
 import re
 import sys
 import time
@@ -10,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import compare, placement
+from . import compare, placement, terrain_tiles
 from .evaluate import evaluate, load_truth
 from .geo import GRID_DEG
 from .load import to_us
@@ -23,7 +25,8 @@ from .pipeline import (
     run_topology,
 )
 from .propagation import FsplKnifeEdge, Radio
-from .terrain import FlatTerrain, Terrain, fetch_glo30, load_glo30
+from .storage import output_fs
+from .terrain import FlatTerrain, Terrain, fetch_glo30, load_glo30, tile_name, tiles_for_bbox
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +83,13 @@ def _parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch-dem", help="download Copernicus GLO-30 tiles covering a box")
     f.add_argument("--bbox", type=bbox, required=True, help="minlat,minlon,maxlat,maxlon")
     f.add_argument("--dem-dir", type=Path, required=True)
+    tt = sub.add_parser("terrain-tiles", help="Terrain-RGB PNG tiles from GLO-30 for the 3D map")
+    tt.add_argument("--region", default="SEA")
+    tt.add_argument("--dem-dir", type=Path, required=True)
+    tt.add_argument("--bbox", type=bbox, required=True, help="minlat,minlon,maxlat,maxlon")
+    tt.add_argument("--minzoom", type=int, default=8)
+    tt.add_argument("--maxzoom", type=int, default=12)
+    tt.add_argument("--out", required=True, help="output root: directory or s3://bucket")
     return p
 
 
@@ -129,14 +139,30 @@ def _propagation(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, 
     unseen = compare.unseen_strong(run, model, radio)
     t_model = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
+    profiles = compare.profiles(run, model, radio)
+    t_profiles = time.perf_counter() - t0
+
     model_meta = {"name": model.name, "version": model.version, "dem": dem}
     docs = {
         "residuals": compare.residuals_json(run, rows, model_meta),
         "surprising": compare.surprising_json(run, rows, unseen, radio),
     }
     surprising = docs["surprising"]
+    n = [len(p["ground_m"]) for p in profiles]
     return {
-        "written": write_summaries(run.region, docs, out),
+        "written": write_summaries(run.region, docs, out)
+        + write_summaries(
+            run.region,
+            compare.shard_profiles(compare.profiles_json(run, profiles, model_meta, radio)),
+            out,
+            compact=True,
+        ),
+        "link_profiles": {
+            "count": len(profiles),
+            "n_min": min(n, default=0),
+            "n_max": max(n, default=0),
+        },
         "model": model_meta,
         "summary": docs["residuals"]["summary"],
         "observed_but_predicted_impossible": len(surprising["observed_but_predicted_impossible"]),
@@ -144,7 +170,11 @@ def _propagation(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, 
         "profiles": model.profiles,
         "profiles_per_s": round(model.profiles / t_model) if t_model else None,
         "timings_s": {k: round(v, 3) for k, v in run.timings_s.items()}
-        | {"dem_load": round(t_dem, 3), "propagation": round(t_model, 3)},
+        | {
+            "dem_load": round(t_dem, 3),
+            "propagation": round(t_model, 3),
+            "link_profiles": round(t_profiles, 3),
+        },
     }
 
 
@@ -184,6 +214,63 @@ def _placement(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, An
     }
 
 
+def _terrain_tiles(args: argparse.Namespace) -> dict[str, Any]:
+    """Write summaries/region=R/terrain/{z}/{x}/{y}.png and terrain.json (docs/api-contract.md)."""
+    if not 0 <= args.minzoom <= args.maxzoom <= terrain_tiles.MAX_ZOOM:
+        raise SystemExit(f"need 0 <= --minzoom <= --maxzoom <= {terrain_tiles.MAX_ZOOM}")
+    west, south, east, north = bounds = terrain_tiles.snap_bounds_outward(*args.bbox)
+    # Refuse rather than publish flat tiles: load_glo30 would read a missing tile as 0 m.
+    missing = [
+        n
+        for lat, lon in tiles_for_bbox(south, west, north, east)
+        if not (args.dem_dir / f"{(n := tile_name(lat, lon))}.tif").exists()
+    ]
+    if missing:
+        raise SystemExit(f"DEM tiles missing in {args.dem_dir} (run fetch-dem): {missing}")
+    t0 = time.perf_counter()
+    terrain = load_glo30(args.dem_dir, south, west, north, east)
+    t_dem = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    fs, base = output_fs(args.out)
+    d = f"{base}/summaries/region={args.region}/terrain"
+    count = size = 0
+    lo, hi = math.inf, -math.inf
+    for t in terrain_tiles.render_all(terrain, bounds, args.minzoom, args.maxzoom):
+        fs.create_dir(f"{d}/{t.z}/{t.x}", recursive=True)
+        with fs.open_output_stream(f"{d}/{t.z}/{t.x}/{t.y}.png") as f:
+            f.write(t.png)
+        count, size = count + 1, size + len(t.png)
+        lo, hi = min(lo, t.min_m), max(hi, t.max_m)
+    t_tiles = time.perf_counter() - t0
+
+    doc = {
+        "meta": {
+            "schema_version": 1,
+            "region": args.region,
+            "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "window": None,
+            "source": "terrain-job",
+        },
+        "encoding": "mapbox",
+        "tile_size": terrain_tiles.TILE_SIZE,
+        "minzoom": args.minzoom,
+        "maxzoom": args.maxzoom,
+        "bounds": bounds,
+        "dem": "Copernicus GLO-30",
+        "tiles": count,
+    }
+    return {
+        "written": [*write_summaries(args.region, {"terrain": doc}, args.out), d],
+        "tiles": count,
+        "bytes": size,
+        "bounds": bounds,
+        "elevation_m": {"min": round(lo, 1), "max": round(hi, 1)},
+        "tiles_per_s": round(count / t_tiles) if t_tiles else None,
+        "timings_s": {"dem_load": round(t_dem, 3), "tiles": round(t_tiles, 3)},
+    }
+
+
 def _run(args: argparse.Namespace) -> TopologyRun:
     if (args.frm is None) != (args.to is None):
         raise SystemExit("--from and --to go together")
@@ -198,6 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "fetch-dem":
         _print(fetch_glo30(args.dem_dir, *args.bbox))
+        return 0
+    if args.command == "terrain-tiles":
+        _print(_terrain_tiles(args))
         return 0
     run = _run(args)
     report: dict[str, Any]

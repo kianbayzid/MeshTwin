@@ -192,3 +192,71 @@ Vulnerability scan (Trivy 0.76.2; the gate fails on HIGH/CRITICAL **with a fix a
 - SBOMs (SPDX 2.3): ingester 43 packages, api 33, analytics 120.
 - The remaining UNKNOWNs are distroless ca-certificates/tzdata advisories (base digest is already the newest) and an x/crypto
   advisory fixed only in an untagged pre-release (not reachable).
+
+## Console Phase 2: terrain tiles (2026-11-11)
+
+| measure | value |
+|---|---|
+| `terrain-tiles` SEA, bounds `[-122.6, 47.3, -121.8, 47.9]`, z8–12 | 161 tiles, 8.3 MB |
+| DEM load (2 GLO-30 tiles) · render + write | 0.79 s · 2.13 s (~75 tiles/s) |
+| elevation sampled in bounds | −5.4 m … 1,091.1 m |
+| spot checks (decoded z12) | Cougar Mtn 468.8 m (summit ≈ 486 m) · Lake Washington 3.0 m · Elliott Bay 0.0 m |
+| one z12 tile over the API | 53 KB PNG |
+
+Docker Desktop Linux container writing to a Windows bind mount. Lake Washington reads 3 m against ~6 m NAVD88:
+GLO-30 flattens water and uses EGM2008 heights.
+
+## Console Phase 3: SEA summaries with GLO-30 (2026-11-11)
+
+Synthetic fixture `sea-seed1-2h-hash1` (75,571 receptions), Docker on the dev machine, wall time incl. `uv run` startup.
+
+| job | wall | notes |
+|---|---|---|
+| topology | 2.98 s | 90 nodes, 317 links, 6 SPOFs |
+| propagation, GLO-30 | 2.52 s | DEM load 0.32 s, model 0.08 s for 85 links |
+| placement, GLO-30 | 17.4 s | 1,400 candidates, 94,260 profiles, ~8,100 profiles/s |
+
+| residuals (85 links) | flat | GLO-30 |
+|---|---|---|
+| median abs | 29.8 dB | 14.6 dB |
+| RMSE | 30.7 dB | 19.1 dB |
+| bias | −30.3 dB | −14.9 dB |
+
+Caveat: the synthetic generator ignores terrain, so the GLO-30 improvement is not evidence about real links
+(see `docs/frontend.md`, "Reading the SEA demo data honestly").
+
+## Console Phase 4: link profiles (2026-11-11)
+
+| measure | value |
+|---|---|
+| profiles written (SEA, GLO-30) | 237 of 317 links (others: same cell or unlocated) |
+| samples per profile | 26–256 |
+| `profiles.json` | 448,295 B compact (72,748 B gzip); API cap 8 MB ≈ 750 indented / 1,300+ compact profiles |
+| time added to the propagation job | 0.06 s |
+| grid path vs exact path, 351FC1F9–FDC42289 | clearance −18.66 vs −18.75 × F1; diffraction 41.3 vs 41.4 dB |
+
+## Console Phase 6: performance pass (2026-11-11)
+
+**Browser** (`web/e2e/perf.spec.ts`, local Chrome, 1440×900, production e2e build served by the Go API):
+
+| data | drawn | first network | idle renders/s | pan frame p50 / p95 / max | JS heap |
+|---|---|---|---|---|---|
+| SEA fixture, before the pulse fix (dev server) | 73 nodes, 242 links | 2.9 s | **45** | 16.7 / 33.4 / 66.5 ms | 53 MB |
+| SEA fixture, after (dev server) | 73 nodes, 242 links | 2.7 s | **0** | 16.7 / 33.4 / 50.6 ms | 39 MB |
+| 5× network (3 runs, production build) | 257 nodes, 3,790 links | 1.6–2.7 s | 0 | 16.6 / 16.7 / 16.8–20.2 ms | 31–43 MB |
+
+**5× pipeline** (`meshgen -repeaters 150 -companions 300 -observers 30 -hash-size 1 -duration 2h -rate 30`, Docker, capped):
+
+| step | wall | peak memory | output |
+|---|---|---|---|
+| meshgen | 101 s | 27 MiB | 1,934,342 receptions (1.2 GB NDJSON) |
+| ingest (replay) | 16.6 s | 1.84 GiB | 2,348,075 rows, 58.2 MB Parquet |
+| topology | 110 s | 2.53 GiB | 326 nodes, 5,977 links, 0 SPOFs |
+| propagation, GLO-30 | 114 s | 2.46 GiB | 834 residual links, 3,747 profiles (16 shards, 11.7 KB – 1.57 MB) |
+| placement, GLO-30 | 215 s (placement step 105–127 s; 98 s after computing the base reachability once) | 2.53 GiB | 1,598 candidates, identical output |
+
+- The first attempt at `-rate 120` projected ~8M receptions / 5 GB NDJSON: past this machine's memory. ~2M receptions is
+  the practical ceiling for one run here.
+- Propagation and placement each redo ~90 s of topology work; reusing the topology job's output is a recorded follow-up.
+- Profile lookup from the largest shard: 29 ms cold (parse + validate 1.57 MB), 1.3 ms cached.
+- API image with the embedded console: 22.2 → 25.1 MB (5.38 → 6.25 MB compressed).
