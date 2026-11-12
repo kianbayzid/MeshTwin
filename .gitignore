@@ -22,3 +22,6 @@ testdata/recorded/raw/
 /web/dist-e2e/
 /web/test-results/
 /web/playwright-report/
+
+# Claude Code: personal, machine-local settings (the shared .claude/ is committed)
+.claude/settings.local.json

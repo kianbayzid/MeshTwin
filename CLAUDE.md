@@ -36,8 +36,22 @@ Portfolio project: every line must be explainable in an interview. Clear > cleve
   The owning lane fixes failures; the verifier never edits.
 - **Merge order** within a phase: analytics and API lanes first (in either order, each verified), then the
   platform lane, which packages what those lanes produced. Re-run the verifier after each merge.
-- Until the repo is under git, "merge" means the lead accepts the change after a `PASS`.
-  With git, each lane works on `lane/<agent>/<topic>`.
+
+## Branches (repo: `github.com/kianbayzid/MeshTwin`, working copy `C:\Users\KianB\Documents\GitHub\MeshTwin`)
+| Branch | Gets |
+|--------|------|
+| `Frontend` | `web/`, `docs/frontend.md` |
+| `Backend` | everything else: `ingest/`, `api/`, `schema/`, `analytics/`, `deploy/`, `dashboards/`, `.github/`, `Makefile`, `testdata/`, `.claude/`, and the **shared files** (`CLAUDE.md`, `README.md`, `docs/` except `docs/frontend.md`) |
+| `main` | only merges of `Frontend` and `Backend`, done by the user |
+
+- Shared files change only on `Backend`, so the two branches never edit the same file.
+- A feature that needs both sides: the backend half lands on `Backend` first (verified), then `Backend` is merged
+  into `Frontend` and the UI half is built against it. `Frontend` therefore contains `Backend`; the final merge into
+  `main` stays clean.
+- One working copy, branches switched in place. Never switch with uncommitted changes or during a merge: stop and
+  ask the user to commit first. Always say which branch a change is on.
+- The user commits and pushes (or asks Claude to commit). Claude never pushes, force-pushes or rewrites published history.
+- "Merged" means the user committed the change on its branch after a verifier `PASS`.
 
 ## Workflow
 - Work in the phases defined in `docs/plan.md`. **Stop after each phase** for the user to run and question it.
