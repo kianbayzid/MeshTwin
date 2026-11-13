@@ -45,7 +45,8 @@ import (
 //     (named public infrastructure) may have a non-null name;
 //   - meta.schema_version is 1 and meta.region matches the requested region;
 //   - meta.window is an object, except for terrain, where it is null;
-//   - terrain: see checkTerrain; profiles (shards): see checkProfiles.
+//   - terrain: see checkTerrain; profiles (shards): see checkProfiles;
+//     coverage: see checkCoverage.
 //
 // Duplicate keys are not rejected: the decoder keeps the last one, that is the
 // value checked, and it is the only one re-encoded and served.
@@ -91,6 +92,11 @@ func validate(region, name string, data []byte) ([]byte, error) {
 	}
 	if name == "profiles" {
 		if err := checkProfiles(doc, shard); err != nil {
+			return nil, err
+		}
+	}
+	if name == "coverage" {
+		if err := checkCoverage(doc); err != nil {
 			return nil, err
 		}
 	}
@@ -174,7 +180,7 @@ func kindOf(v any) string {
 var (
 	intFields = []string{"degree", "observations", "samples", "nodes", "links", "receptions", "flood_receptions",
 		"observers", "unresolved_hops", "reachable_pairs", "reachable_pairs_lost", "nodes_cut_off", "rank",
-		"coverage_gain_nodes", "reachable_pairs_gained", "candidates_scored", "spofs_checked_top"}
+		"coverage_gain_nodes", "reachable_pairs_gained", "candidates_scored", "spofs_checked_top", "transmitters"}
 	unitFields = []string{"confidence", "score", "reachable_share", "reachable_share_after", "ambiguous_hop_share"}
 )
 
@@ -283,6 +289,43 @@ func checkTerrain(doc map[string]any) error {
 	w, s, e, n := number(b[0]), number(b[1]), number(b[2]), number(b[3])
 	if !(-180 <= w && w < e && e <= 180 && -90 <= s && s < n && n <= 90) { // !(...) also rejects NaN
 		return fmt.Errorf("bounds = %v: want -180 <= west < east <= 180, -90 <= south < north <= 90", doc["bounds"])
+	}
+	return nil
+}
+
+// maxCoverageCells caps the coverage raster (docs/api-contract.md): 250,000
+// cells is ~2 MB of JSON, inside store.MaxBytes.
+const maxCoverageCells = 250_000
+
+// checkCoverage checks the coverage raster beyond its shape: a 0.01° grid
+// (cells no finer than the contract's location grid) anchored on cell centres,
+// with exactly one value per cell, so the console's indexing is unambiguous.
+func checkCoverage(doc map[string]any) error {
+	m, _ := doc["method"].(map[string]any)
+	if g, _ := m["grid_deg"].(json.Number); g != "0.01" {
+		return fmt.Errorf("method.grid_deg = %v, want 0.01", m["grid_deg"])
+	}
+	g, _ := doc["grid"].(map[string]any)
+	if g == nil {
+		return errors.New("grid is missing or null")
+	}
+	rows, cols := number(g["rows"]), number(g["cols"])
+	if !isInt(g["rows"]) || !isInt(g["cols"]) || !(rows >= 1 && cols >= 1) {
+		return fmt.Errorf("grid.rows = %v, grid.cols = %v: want positive integers", g["rows"], g["cols"])
+	}
+	if rows*cols > maxCoverageCells {
+		return fmt.Errorf("grid is %v x %v cells, over the %d cap", rows, cols, maxCoverageCells)
+	}
+	// The same grid and range checks checkObject applies to a location's lat and lon.
+	if n := number(g["north"]); !maxDecimals(g["north"], 2) || !(n >= -90 && n <= 90) {
+		return fmt.Errorf("grid.north = %v is not a latitude on the 0.01° grid", g["north"])
+	}
+	if w := number(g["west"]); !maxDecimals(g["west"], 2) || !(w >= -180 && w <= 180) {
+		return fmt.Errorf("grid.west = %v is not a longitude on the 0.01° grid", g["west"])
+	}
+	snr, ok := doc["snr_db"].([]any)
+	if !ok || float64(len(snr)) != rows*cols {
+		return fmt.Errorf("snr_db has %d values, want rows x cols = %v", len(snr), rows*cols)
 	}
 	return nil
 }

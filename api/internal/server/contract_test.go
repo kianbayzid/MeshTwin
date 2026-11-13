@@ -27,7 +27,7 @@ func contractExamples(t *testing.T) map[string]map[string]any {
 	marker := map[string]string{
 		"regions": "regions", "stats": "topology", "baseline": "resilience", "summary": "residuals",
 		"observed_but_predicted_impossible": "surprising", "params": "profiles", "candidates": "placement",
-		"encoding": "terrain", "ingest": "status",
+		"grid": "coverage", "encoding": "terrain", "ingest": "status",
 	}
 	out := map[string]map[string]any{}
 	for _, m := range regexp.MustCompile("(?s)```json\r?\n(.*?)```").FindAllStringSubmatch(string(doc), -1) {
@@ -120,6 +120,7 @@ func TestContractExamples(t *testing.T) {
 		"surprising": "/api/v1/regions/SEA/links/surprising",
 		"profiles":   "/api/v1/regions/SEA/links/3491927B/351FC1F9/profile",
 		"placement":  "/api/v1/regions/SEA/placement",
+		"coverage":   "/api/v1/regions/SEA/coverage",
 		"terrain":    "/api/v1/regions/SEA/terrain.json",
 	} {
 		rec := get(t, h, url)
@@ -141,10 +142,16 @@ func TestContractExamples(t *testing.T) {
 // must pass validation and be served as stored.
 func TestRealAnalyticsOutput(t *testing.T) {
 	h := New(store.Local{Root: "../../testdata"}, Embedded, time.Minute).Handler()
+	// coverage.json is added once the placement job writes it; until then it is 503 (not_ready) and unlisted.
+	summaries, coverageStatus := 7, 503
+	if _, err := os.Stat("../../testdata/summaries/region=SEA/coverage.json"); err == nil {
+		summaries, coverageStatus = 8, 200
+	}
 	for _, tc := range []struct {
 		url    string
 		status int
 	}{
+		{"/api/v1/regions/SEA/coverage", coverageStatus},
 		{"/api/v1/regions/SEA/topology", 200},
 		{"/api/v1/regions/SEA/topology?min_confidence=0.9", 200},
 		{"/api/v1/regions/SEA/resilience", 200},
@@ -181,7 +188,7 @@ func TestRealAnalyticsOutput(t *testing.T) {
 	if err := json.Unmarshal(get(t, h, "/api/v1/regions").Body.Bytes(), &regions); err != nil || len(regions.Regions) != 1 {
 		t.Fatalf("regions: %v %+v", err, regions)
 	}
-	if r := regions.Regions[0]; r.Region != "SEA" || len(r.Summaries) != 7 || r.Nodes == nil {
+	if r := regions.Regions[0]; r.Region != "SEA" || len(r.Summaries) != summaries || r.Nodes == nil {
 		t.Errorf("SEA = %+v", r)
 	}
 }

@@ -175,6 +175,25 @@ var allowed = map[string]map[string]string{
 		"method.grid_deg":                           "number",
 		"method.model":                              "string",
 	}),
+	// Values are checked in checkCoverage.
+	"coverage": withMeta(map[string]string{
+		"grid":                   "object",
+		"grid.cols":              "number",
+		"grid.north":             "number",
+		"grid.rows":              "number",
+		"grid.west":              "number",
+		"method":                 "object",
+		"method.dem":             "string",
+		"method.grid_deg":        "number",
+		"method.max_distance_km": "number",
+		"method.model":           "string",
+		"method.rx_height_m":     "number",
+		"method.snr_floor_db":    "number",
+		"method.transmitters":    "number",
+		"method.tx_height_m":     "number",
+		"snr_db":                 "array",
+		"snr_db[]":               "number",
+	}),
 	// Terrain is not data from a time window: meta.window must be null (the
 	// only summary where it may be). Values are checked in checkTerrain.
 	"terrain": {

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import compare, placement, terrain_tiles
+from . import compare, coverage, placement, terrain_tiles
 from .evaluate import evaluate, load_truth
 from .geo import GRID_DEG
 from .load import to_us
@@ -203,14 +203,60 @@ def _placement(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, An
         "spofs_checked_top": placement.SPOF_CHECK_TOP_K,
     }
     doc = placement.placement_json(run, candidates, method)
+
+    # Coverage: every grid cell, water included. Its own model instance, so its own counter.
+    t0 = time.perf_counter()
+    cov_model = FsplKnifeEdge(terrain, radio)
+    tx = [
+        (n.lat, n.lon)
+        for k in run.graph.nodes
+        if (n := run.nodes[k]).role in coverage.TRANSMITTER_ROLES
+        and n.lat is not None
+        and n.lon is not None
+    ]
+    cov = coverage.coverage(placement.grid_cells(_located(run)), tx, cov_model, radio)
+    t_cov = time.perf_counter() - t0
+    cov_method = {
+        "grid_deg": GRID_DEG,
+        "model": f"{model.name} v{model.version}",
+        "dem": dem,
+        "tx_height_m": radio.infrastructure_height_m,
+        "rx_height_m": radio.client_height_m,
+        "max_distance_km": placement.MAX_LINK_DISTANCE_KM,
+        "snr_floor_db": radio.snr_floor_db,
+        "transmitters": len(tx),
+    }
+    covered = [v for v in cov.snr_db if v is not None]
+    n_cells = max(1, len(cov.snr_db))
     return {
-        "written": write_summaries(run.region, {"placement": doc}, out),
+        "written": write_summaries(run.region, {"placement": doc}, out)
+        + write_summaries(
+            run.region,
+            {"coverage": coverage.coverage_json(run, cov, cov_method)},
+            out,
+            compact=True,
+        ),
         "method": method,
         "top": doc["candidates"][:5],
         "profiles": model.profiles,
         "profiles_per_s": round(model.profiles / t_model) if t_model else None,
+        "coverage": {
+            "rows": cov.rows,
+            "cols": cov.cols,
+            "transmitters": len(tx),
+            "non_null_fraction": round(len(covered) / n_cells, 4),
+            "above_floor_fraction": round(
+                sum(v >= radio.snr_floor_db for v in covered) / n_cells, 4
+            ),
+            "profiles": cov_model.profiles,
+            "profiles_per_s": round(cov_model.profiles / t_cov) if t_cov else None,
+        },
         "timings_s": {k: round(v, 3) for k, v in run.timings_s.items()}
-        | {"dem_load": round(t_dem, 3), "placement": round(t_model, 3)},
+        | {
+            "dem_load": round(t_dem, 3),
+            "placement": round(t_model, 3),
+            "coverage": round(t_cov, 3),
+        },
     }
 
 

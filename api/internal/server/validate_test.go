@@ -118,7 +118,7 @@ func TestValidateDuplicateKeyNotServed(t *testing.T) {
 }
 
 func TestValidateEveryFixture(t *testing.T) {
-	docs := map[string]string{"placement": placementFixture}
+	docs := map[string]string{"placement": placementFixture, "coverage": coverageFixture}
 	for name, body := range fixtures {
 		docs[name] = body
 	}

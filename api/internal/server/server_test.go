@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,6 +49,13 @@ const placementFixture = `{` + validMeta + `,
     {"rank": 3, "location": {"lat": 47.6, "lon": -122.2, "grid_deg": 0.01}, "score": 0.1, "spofs_removed": [], "new_links": []},
     {"rank": 1, "location": {"lat": 47.68, "lon": -122.21, "grid_deg": 0.01}, "score": 0.8, "spofs_removed": ["351FC1F9"], "new_links": [{"to": "351FC1F9", "predicted_snr_db": 5.5}]},
     {"rank": 2, "location": {"lat": 47.61, "lon": -122.22, "grid_deg": 0.01}, "score": 0.5, "spofs_removed": [], "new_links": []}]}`
+
+// coverageFixture is a 2 x 3 raster: one value per cell, null where no transmitter reaches.
+const coverageFixture = `{` + validMeta + `,
+  "method": {"grid_deg": 0.01, "model": "fspl+knife-edge v1", "dem": "flat (no DEM)",
+             "tx_height_m": 10, "rx_height_m": 2, "max_distance_km": 30, "snr_floor_db": -7.5, "transmitters": 2},
+  "grid": {"north": 47.62, "west": -122.35, "rows": 2, "cols": 3},
+  "snr_db": [-3.5, -2.0, null, 4.5, -12.0, -7.5]}`
 
 func writeSummary(t *testing.T, root, region, name, body string) {
 	t.Helper()
@@ -323,6 +331,81 @@ func TestRegions(t *testing.T) {
 		sea.Nodes == nil || *sea.Nodes != 3 || *sea.Links != 3 ||
 		sea.UpdatedAt.Format(time.RFC3339) != "2026-11-09T15:00:00Z" { // newest: the residuals fixture
 		t.Errorf("SEA = %+v (updated_at %v)", sea, sea.UpdatedAt)
+	}
+}
+
+func TestCoverage(t *testing.T) {
+	cov := func(old, new string) string {
+		if !strings.Contains(coverageFixture, old) {
+			t.Fatalf("fixture has no %q", old)
+		}
+		return strings.Replace(coverageFixture, old, new, 1)
+	}
+	// sized is the fixture resized to rows x cols, every cell 0.
+	sized := func(rows, cols int) string {
+		return strings.Replace(cov(`"rows": 2, "cols": 3`, fmt.Sprintf(`"rows": %d, "cols": %d`, rows, cols)),
+			`[-3.5, -2.0, null, 4.5, -12.0, -7.5]`, "["+strings.Repeat("0,", rows*cols-1)+"0]", 1)
+	}
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"valid", coverageFixture, 200},
+		{"at the cell cap", sized(500, 500), 200},
+		{"over the cell cap", sized(501, 500), 503},
+		{"too few values", cov(`, -7.5]`, `]`), 503},
+		{"too many values", cov(`, -7.5]`, `, -7.5, 1.0]`), 503},
+		{"snr_db null", cov(`[-3.5, -2.0, null, 4.5, -12.0, -7.5]`, `null`), 503},
+		{"snr_db missing", cov(`,
+  "snr_db": [-3.5, -2.0, null, 4.5, -12.0, -7.5]`, ``), 503},
+		{"snr value not a number", cov(`-3.5,`, `"x",`), 503},
+		{"grid null", cov(`{"north": 47.62, "west": -122.35, "rows": 2, "cols": 3}`, `null`), 503},
+		{"rows zero", cov(`"rows": 2, "cols": 3`, `"rows": 0, "cols": 3`), 503},
+		{"rows negative", cov(`"rows": 2, "cols": 3`, `"rows": -2, "cols": -3`), 503},
+		{"rows not integer", cov(`"rows": 2`, `"rows": 2.0`), 503},
+		{"north off grid", cov(`"north": 47.62`, `"north": 47.6205`), 503},
+		{"west off grid", cov(`"west": -122.35`, `"west": -122.351`), 503},
+		{"north out of range", cov(`"north": 47.62`, `"north": 4762`), 503},
+		{"west exponent", cov(`"west": -122.35`, `"west": -1.2235e2`), 503},
+		{"finer grid", cov(`"grid_deg": 0.01`, `"grid_deg": 0.001`), 503},
+		{"transmitters not integer", cov(`"transmitters": 2`, `"transmitters": 2.5`), 503},
+		{"field not in allow-list", cov(`"rows": 2,`, `"rows": 2, "lat": 47.6205,`), 503},
+		{"wrong region", cov(`"region": "SEA"`, `"region": "PDX"`), 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, root := newTestServer(t, false)
+			writeSummary(t, root, "SEA", "coverage", tc.body)
+			rec := get(t, h, "/api/v1/regions/SEA/coverage")
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %.300s", rec.Code, tc.status, rec.Body)
+			}
+			listed := strings.Contains(get(t, h, "/api/v1/regions").Body.String(), `"coverage"`)
+			if listed != (tc.status == 200) {
+				t.Errorf("/regions lists coverage = %v, want %v", listed, tc.status == 200)
+			}
+			if tc.status != 200 {
+				return
+			}
+			if g := decode(t, rec)["grid"].(map[string]any); g["north"] != 47.62 || g["west"] != -122.35 {
+				t.Errorf("grid = %v", g)
+			}
+		})
+	}
+}
+
+func TestCoverageCountsForUpdatedAt(t *testing.T) {
+	root := t.TempDir()
+	writeSummary(t, root, "SEA", "coverage", strings.Replace(coverageFixture, "2026-11-09T14:00:00Z", "2026-11-12T02:17:00Z", 1))
+	h := New(store.Local{Root: root}, Embedded, time.Minute).Handler()
+	var got struct {
+		Regions []regionInfo `json:"regions"`
+	}
+	if err := json.Unmarshal(get(t, h, "/api/v1/regions").Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Regions) != 1 || !slices.Equal(got.Regions[0].Summaries, []string{"coverage"}) ||
+		got.Regions[0].UpdatedAt == nil || got.Regions[0].UpdatedAt.Format(time.RFC3339) != "2026-11-12T02:17:00Z" {
+		t.Errorf("regions = %+v", got.Regions)
 	}
 }
 

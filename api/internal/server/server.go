@@ -83,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/regions/{region}/links/surprising", s.summaryHandler("surprising", nil))
 	mux.HandleFunc("GET /api/v1/regions/{region}/links/{a}/{b}/profile", s.profile)
 	mux.HandleFunc("GET /api/v1/regions/{region}/placement", s.summaryHandler("placement", placementQuery))
+	mux.HandleFunc("GET /api/v1/regions/{region}/coverage", s.summaryHandler("coverage", nil))
 	mux.HandleFunc("GET /api/v1/regions/{region}/terrain.json", s.summaryHandler("terrain", nil))
 	// A wildcard must be a whole segment, so "{y}.png" is matched as {file} and parsed in tile.
 	mux.HandleFunc("GET /api/v1/regions/{region}/terrain/{z}/{x}/{file}", s.tile)

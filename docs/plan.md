@@ -107,3 +107,24 @@
 - Lead: README.md, CI pins in data-sources.md, numbers in benchmarks.md.
 - Verifier rounds: Go 1 + follow-ups, platform 1 (combined final PASS). `make smoke` passed with the new images.
 - Follow-ups: the workflow has never run on GitHub (needs `git init` + a remote); local `make smoke` can test a stale image because the tag doesn't change (CI builds fresh); one empty reply during an API rolling restart (not investigated); analytics on bookworm has 98 unfixable HIGH/CRITICAL (Debian trixie later); x/crypto advisory fixed only in a pre-release; Trivy DB not cached.
+
+## Next (decided 2026-11-12, stop after each)
+Console phases 1–6 are recorded in `docs/frontend.md`.
+1. **Console Phase 7: predicted coverage raster.** Backend half done and verified (analytics `coverage.json` from the
+   placement job, `GET /regions/{region}/coverage`); map layer + margin slider next on `Frontend`.
+2. **Live feed + several regions.** The user's MeshCore radio on USB → `meshcoretomqtt` on the PC → the cluster's
+   broker (own-observer setting). Topology refresh from hourly to minutes; status strip shows live vs synthetic.
+   The pipeline runs one region per Helm value today: make the ingester, CronJobs and DEM fetch run per region.
+3. **City lookup.** Search a city in the console → its region code from a bundled airport list (no outside calls from
+   the browser) → whether a feed carries that region → collection starts in the cluster (not from a public API button:
+   the API stays read-only) → terrain fetched for the area → map once enough has been heard (hours, not instantly:
+   brokers are live streams without history).
+   - Depends on a **LetsMesh subscribe-only, full-access (role 2) account**, to be requested from the operator
+     (draft written 2026-11-12). Role 3 strips SNR/RSSI, which the model needs. Until then only regions the user's own radio hears.
+   - A region's feed is read only after its terms are checked (`docs/data-sources.md` rule), per community.
+4. **Satellite LoRa telemetry (TinyGS).** The same predicted-vs-observed question with one end in orbit: TLEs
+   (CelesTrak) + SGP4 for passes, slant-range FSPL, each station's horizon mask from the GLO-30 terrain, compared with
+   received satellite packets (SNR by elevation angle). Reuses ingest/Parquet/DDIL, the link budget, residuals and the
+   console. Smallest version first: one station, analytics only, written up with numbers.
+   - Needs a second ESP32 + SX126x board for TinyGS firmware (one radio can't run MeshCore and TinyGS together).
+   - Data access and terms checked first (research lane, 2026-11-12); station locations are snapped like node locations.

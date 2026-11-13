@@ -260,3 +260,17 @@ Caveat: the synthetic generator ignores terrain, so the GLO-30 improvement is no
 - Propagation and placement each redo ~90 s of topology work; reusing the topology job's output is a recorded follow-up.
 - Profile lookup from the largest shard: 29 ms cold (parse + validate 1.57 MB), 1.3 ms cached.
 - API image with the embedded console: 22.2 → 25.1 MB (5.38 → 6.25 MB compressed).
+
+## Console Phase 7: predicted coverage raster (2026-11-12)
+
+`meshtwin-analytics placement` on `sea-seed1-2h-hash1` with GLO-30 (Windows dev laptop, host venv, DEM cache hit):
+
+| step | time | work |
+|---|---|---|
+| coverage step | 3.84 s | 1,520 cells (38 × 40), 30 transmitters, 39,421 profiles (≈10,300 profiles/s) |
+| placement step (unchanged) | 11.24 s | 94,260 profiles (≈8,400 profiles/s) |
+| whole command | 17.6 s wall | including `uv run` startup and topology |
+
+- `coverage.json`: 7,933 bytes compact.
+- On this fixture every cell is in range and above the −7.5 dB floor (99.3% at ≥ floor + 10 dB): the synthetic network
+  is dense and the model optimistic, so the SEA demo shows no coverage gaps. SNR min / median / max: −4.0 / 29.0 / 90.5 dB.

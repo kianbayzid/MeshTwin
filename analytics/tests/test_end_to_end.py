@@ -81,6 +81,7 @@ SUMMARIES = {
     "residuals": "propagation-job",
     "surprising": "propagation-job",
     "placement": "placement-job",
+    "coverage": "placement-job",
 } | {f"profiles/{s}": "propagation-job" for s in SHARDS}
 
 
@@ -264,6 +265,23 @@ def test_placement(out_dir: Path) -> None:
         assert snr == sorted(snr, reverse=True)
         assert set(c["spofs_removed"]) <= spofs
         assert c["reachable_pairs_gained"] >= 0 and c["coverage_gain_nodes"] >= 0
+
+
+def test_coverage(out_dir: Path) -> None:
+    doc = _summary(out_dir, "coverage")
+    assert set(doc) == {"meta", "method", "grid", "snr_db"}
+    m, g = doc["method"], doc["grid"]
+    assert m["model"] == "fspl+knife-edge v1" and m["dem"] == "flat (no DEM)"
+    assert (m["tx_height_m"], m["rx_height_m"], m["max_distance_km"]) == (10, 2, 30)
+    roles = [n["role"] for n in _summary(out_dir, "topology")["nodes"] if n["location"]]
+    assert m["transmitters"] == sum(r in ("repeater", "room") for r in roles) > 0
+    assert len(doc["snr_db"]) == g["rows"] * g["cols"] <= 250_000
+    for v in (g["north"], g["west"]):
+        assert math.isclose(v * 100, round(v * 100), abs_tol=1e-9) and round(v, 2) == v
+    # Same grid as placement's candidates (flat terrain: no water filter, so all cells scored).
+    assert g["rows"] * g["cols"] == _summary(out_dir, "placement")["method"]["candidates_scored"]
+    values = [v for v in doc["snr_db"] if v is not None]
+    assert values and all(v * 2 == int(v * 2) for v in values)
 
 
 # --- evaluation floors (measured: see analytics/README.md) -------------------------------

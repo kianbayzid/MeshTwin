@@ -349,6 +349,21 @@ further west (47.52, −122.18), between the islands. Both are the places a huma
 first; whether one repeater could really close a ~15 km gap is exactly what the optimistic model
 can't promise.
 
+### Predicted coverage (Console Phase 7)
+The same `placement` job also writes `coverage.json` (`coverage.py`, contract in
+`docs/api-contract.md`). For every cell of placement's grid, water included (coverage over water is
+real), it asks the same model what SNR a handheld (2 m) in the cell centre would get from each
+repeater and room server (10 m) within 30 km, and keeps the best one, rounded to 0.5 dB; `null` if
+no transmitter is in range. Values below the demodulation floor are kept so the console can pick its
+own margin. **Privacy:** transmitters are moved to their snapped cell centre before the model sees
+them, because a smooth field computed from a raw position would give that position away; a test
+moves a repeater inside its cell and checks that no value changes. Transmitters sharing a cell are
+modelled once. Values are the model's: next to a transmitter it predicts 90 dB, far above anything a
+LoRa radio reports, so the console should clamp its colour scale.
+
+Measured (hash1 fixture, GLO-30): 38 × 40 cells, 30 transmitters, 39,421 profiles in 3.8 s
+(~10k profiles/s); every cell in range and above the floor; `coverage.json` 7.9 KB compact.
+
 ## Terrain tiles for the 3D map (Console Phase 2)
 
 ```sh

@@ -42,7 +42,7 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 // Names are the summaries the API serves, in display order. Any other file
 // under summaries/ is ignored, so a stray object never becomes a route.
 // "profiles" is stored only as shards (ProfileShard), never as profiles.json.
-var Names = []string{"topology", "resilience", "residuals", "surprising", "profiles", "placement", "terrain"}
+var Names = []string{"topology", "resilience", "residuals", "surprising", "profiles", "placement", "coverage", "terrain"}
 
 // ProfileShards are the shard characters of the profiles summary: the first
 // hex digit of a link's smaller (upper-cased) id (docs/api-contract.md).

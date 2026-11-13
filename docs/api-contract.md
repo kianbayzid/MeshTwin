@@ -46,7 +46,7 @@ Regions with at least one summary.
 {
   "regions": [
     {"region": "SEA", "updated_at": "2026-11-09T14:00:00Z", "nodes": 87, "links": 241,
-     "summaries": ["topology", "resilience", "residuals", "surprising", "profiles", "placement", "terrain"]}
+     "summaries": ["topology", "resilience", "residuals", "surprising", "profiles", "placement", "coverage", "terrain"]}
   ]
 }
 ```
@@ -231,6 +231,38 @@ Query: `top` (default 10, max 50).
 - `score` is in [0, 1] and relative to the run: 0.7 × pairs gained / best pairs gained + 0.3 × SPOFs removed / total SPOFs.
 - `spofs_removed` is computed only for the `method.spofs_checked_top` cells with the most pairs gained; other cells show `[]` (never over-claims).
 - `method.dem` is `"Copernicus GLO-30"` or `"flat (no DEM)"`, as in residuals.
+
+### `GET /api/v1/regions/{region}/coverage`
+Predicted coverage: for every 0.01° cell, the best SNR the model predicts at a handheld in that cell from any
+repeater or room server. Source: the nightly placement job (Console Phase 7), on the same grid, DEM and model.
+```json
+{
+  "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-12T02:17:00Z",
+           "window": {"from": "2026-11-05T02:17:00Z", "to": "2026-11-12T02:17:00Z"}, "source": "placement-job"},
+  "method": {"grid_deg": 0.01, "model": "fspl+knife-edge v1", "dem": "Copernicus GLO-30",
+             "tx_height_m": 10, "rx_height_m": 2, "max_distance_km": 30, "snr_floor_db": -7.5, "transmitters": 37},
+  "grid": {"north": 47.91, "west": -122.62, "rows": 1, "cols": 3},
+  "snr_db": [-3.5, -2.0, null]
+}
+```
+- `snr_db` is row-major, `rows × cols` long (a real SEA grid is about 60 × 80). Row 0 is the north row, column 0 the west column:
+  cell `(r, c)` is centred at `lat = north − r × grid_deg`, `lon = west + c × grid_deg`.
+- `north` and `west` are cell centres (integer multiples of 0.01°, as `round(x, 2)` gives). The grid is placement's
+  candidate grid (located nodes' box plus one cell), water included: coverage over water is real.
+- A value is the best predicted SNR (dB, rounded to 0.5) over all transmitters within `max_distance_km`; `null` when
+  there is none. Values below `snr_floor_db` are kept: the console picks its own margin over the floor.
+- **Transmitters are placed at their snapped cell centres, not their raw positions.** A continuous field computed from
+  a raw position would reveal it to well under a cell; from the centre it reveals nothing the topology doesn't.
+- Transmitters are the located nodes with role `repeater` or `room` (they forward floods); `method.transmitters`
+  counts them. `method.dem` as in placement.
+- The API refuses (503) a document whose `snr_db` length isn't `rows × cols`, whose `rows × cols` exceeds 250,000,
+  whose `north`/`west` isn't on the 0.01° grid, or whose `method.grid_deg` isn't 0.01 (finer cells would break
+  the ~1 km rule).
+- `/regions` lists `coverage` when the document exists and is valid.
+- With no located nodes the job writes an empty grid (`rows: 0`); the API refuses it like any invalid document, so
+  the region simply doesn't list `coverage`.
+- Right next to a transmitter the model predicts SNRs far above anything a LoRa radio reports (free space over
+  tens of metres, no receiver saturation). The value stays as predicted; the console clamps its colour scale.
 
 ### `GET /api/v1/regions/{region}/terrain.json`
 Metadata for the 3D map's elevation tiles. Source: the terrain job (`meshtwin-analytics terrain-tiles`, Console
