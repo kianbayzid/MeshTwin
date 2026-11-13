@@ -3,6 +3,8 @@ import maplibregl, { type ExpressionSpecification, type GeoJSONSource, type Map 
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { TOP_CANDIDATES, type Summaries } from '../api/client';
 import { bounds, linksGeo, nodesGeo, placementGeo, predictedOnlyGeo, type Filters } from '../map/geojson';
+import { db } from '../format';
+import { COVERAGE_MAX_MARGIN_DB, coverageGeo } from '../map/coverage';
 import { addIcons } from '../map/icons';
 import { nearest } from '../map/pick';
 import type { BaseStyle } from '../map/style';
@@ -36,6 +38,12 @@ function home(data: Summaries, base: BaseStyle): [[number, number], [number, num
   return bounds(data.topology) ?? (t && [[t[0], t[1]], [t[2], t[3]]]);
 }
 
+// Predicted coverage: magenta (the palette's "predicted"), dim at the margin you ask for, full at +30 dB.
+// Cells under the chosen margin aren't drawn, so "not covered" reads as plain terrain, not as a colour.
+const coverageColor: ExpressionSpecification = ['interpolate', ['linear'], ['get', 'margin'],
+  0, palette.magentaDim, COVERAGE_MAX_MARGIN_DB, palette.magenta];
+const coverageFilter = (margin: number): ExpressionSpecification => ['>=', ['get', 'margin'], margin];
+
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 export function MapView({ base, data, layers, filters, view, selection, resetSignal, onSelect }: Props) {
@@ -67,6 +75,12 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
       map.addSource('nodes', { type: 'geojson', data: nodesGeo(data.topology, data.resilience) });
       map.addSource('placement', { type: 'geojson', data: placementGeo(data.placement) });
       map.addSource('predicted', { type: 'geojson', data: predictedOnlyGeo(data.topology, data.surprising) });
+      map.addSource('coverage', { type: 'geojson', data: coverageGeo(data.coverage) });
+
+      // Coverage sits under every network layer: it's context, the links and nodes are the story.
+      map.addLayer({ id: 'coverage', type: 'fill', source: 'coverage', filter: coverageFilter(layers.coverageMargin),
+        layout: { visibility: layers.coverage ? 'visible' : 'none' },
+        paint: { 'fill-color': coverageColor, 'fill-opacity': 0.3, 'fill-antialias': false } });
 
       // Predicted strong but never observed: magenta, dashed and thin, under the observed links.
       map.addLayer({ id: 'predicted', type: 'line', source: 'predicted',
@@ -100,6 +114,20 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
         map.on('mouseenter', id, () => (map.getCanvas().style.cursor = 'pointer'));
         map.on('mouseleave', id, () => (map.getCanvas().style.cursor = ''));
       }
+      // Hovering a coverage cell shows its numbers, so the layer never relies on colour alone.
+      const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: 'cov-popup', offset: 12 });
+      map.on('mousemove', (e) => {
+        const hit = map.getLayer('coverage') && map.getLayoutProperty('coverage', 'visibility') === 'visible'
+          ? map.queryRenderedFeatures(e.point, { layers: ['coverage', 'nodes', 'links-hit'] }) : [];
+        const cell = hit[0]?.layer.id === 'coverage' ? hit[0] : undefined; // a node or link under the cursor wins
+        if (!cell) { popup.remove(); return; }
+        const { snr, margin } = cell.properties as { snr: number; margin: number };
+        popup.setLngLat(e.lngLat)
+          .setHTML(`<strong>Predicted SNR ${db(snr)}</strong><br>${margin.toFixed(1)} dB above the decode floor`)
+          .addTo(map);
+      });
+      map.on('mouseout', () => popup.remove());
+
       map.on('click', (e) => {
         const hit = map.queryRenderedFeatures(e.point, { layers: ['nodes', 'links-hit'] });
         const node = hit.find((f) => f.layer.id === 'nodes');
@@ -169,6 +197,7 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
     (m.getSource('nodes') as GeoJSONSource).setData(nodesGeo(data.topology, data.resilience));
     (m.getSource('placement') as GeoJSONSource).setData(placementGeo(data.placement));
     (m.getSource('predicted') as GeoJSONSource).setData(predictedOnlyGeo(data.topology, data.surprising));
+    (m.getSource('coverage') as GeoJSONSource).setData(coverageGeo(data.coverage));
   }), [data]);
 
   useEffect(() => whenReady((m) => {
@@ -178,6 +207,8 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
     vis('spof-ring', layers.spofs);
     vis('placement', layers.placement);
     vis('predicted', layers.predicted);
+    vis('coverage', layers.coverage);
+    m.setFilter('coverage', coverageFilter(layers.coverageMargin));
     const color = layers.linkColor === 'residual' ? residualColor : snrColor;
     m.setPaintProperty('links', 'line-color', color);
     m.setPaintProperty('links-uncertain', 'line-color', color);

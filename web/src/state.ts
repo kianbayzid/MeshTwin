@@ -6,7 +6,7 @@ export interface Layers {
   placement: boolean;
   predicted: boolean;
   coverage: boolean;
-  coverageOpacity: number;
+  coverageMargin: number; // dB above the decode floor that counts as covered
 }
 
 export interface View {
@@ -24,5 +24,5 @@ export const initialLayers: Layers = {
   placement: true,
   predicted: false,
   coverage: false,
-  coverageOpacity: 0.5,
+  coverageMargin: 5, // placement's LINK_MARGIN_DB: the fade margin it asks of a new link
 };

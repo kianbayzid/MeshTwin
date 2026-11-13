@@ -1,8 +1,19 @@
+import { COVERAGE_MAX_MARGIN_DB } from '../map/coverage';
 import type { Layers, View } from '../state';
 
-export function Legend({ linkColor, predicted }: { linkColor: Layers['linkColor']; predicted: boolean }) {
+export function Legend({ linkColor, predicted, coverageMargin }: {
+  linkColor: Layers['linkColor']; predicted: boolean; coverageMargin: number | null;
+}) {
   return (
     <div className="legend" aria-label="Map legend">
+      {coverageMargin != null && (
+        <>
+          <span className="legend-title">Predicted coverage, handset at 2 m</span>
+          <span className="ramp ramp-cov" />
+          <span className="ramp-labels mono"><span>+{coverageMargin} dB</span><span>+{COVERAGE_MAX_MARGIN_DB} dB over floor</span></span>
+          <span className="ramp-labels"><span>blank: not covered</span></span>
+        </>
+      )}
       {linkColor === 'snr' ? (
         <>
           <span className="legend-title">Observed SNR (last hop)</span>
@@ -52,7 +63,7 @@ export function ViewControls({ view, setView, onReset, terrain }: ControlsProps)
           <span>Terrain ×</span>
           <output className="mono live">{view.exaggeration.toFixed(1)}</output>
         </span>
-        <input type="range" min={1} max={4} step={0.1} value={view.exaggeration} disabled={!canExaggerate}
+        <input type="range" aria-label="Terrain exaggeration" min={1} max={4} step={0.1} value={view.exaggeration} disabled={!canExaggerate}
           onChange={(e) => setView({ ...view, exaggeration: Number(e.target.value) })} />
       </label>
       <button className="action small" onClick={onReset}>Reset view</button>

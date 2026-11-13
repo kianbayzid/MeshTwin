@@ -12,6 +12,7 @@ real terrain, what the radio model predicted, what the mesh actually did, and wh
 | 4 | Link inspector: terrain profile + Fresnel zone (new endpoint) | done (2026-11-11) |
 | 5 | Node inspector, parameter panel, status strip on live metrics | done (2026-11-11) |
 | 6 | Performance, Helm, Playwright in CI, README media | done (2026-11-11) |
+| 7 | Predicted coverage layer (new endpoint) | done (2026-11-12) |
 
 ## Run
 ```sh
@@ -176,6 +177,26 @@ sh web/scripts/fetch-basemap.sh   # optional, once, online: OSM basemap into web
 - **README media are reproducible:** `web/scripts/capture-media.mjs` takes the screenshots and the GIF (frames as
   screenshots, encoded by the system ffmpeg).
 
+## Decisions (Phase 7)
+- **What the layer answers:** "if I stood here with a handheld, would the model expect me to reach a repeater?" Best
+  predicted SNR per 0.01° cell from any repeater or room server (handset 2 m, repeater 10 m), computed nightly by the
+  placement job on the same grid, DEM and model (`GET /regions/{region}/coverage`, contract in `docs/api-contract.md`).
+- **Privacy:** the job places each repeater at its snapped cell centre before predicting. A smooth signal field around a
+  raw position would give that position away far below 1 km; from the cell centre it reveals nothing the map doesn't.
+- **"Covered" is a margin the reader picks**, 0–20 dB over the decode floor (default 5 dB, the fade margin placement
+  asks of a new link). The cut is a layer filter, so the slider never rebuilds the data. Cells under it aren't drawn:
+  "not covered" reads as plain terrain, not as one more colour to decode.
+- **Colour:** magenta (the palette's "predicted"), one hue from dim at the chosen margin to full at +30 dB, where a
+  radio can't tell the difference any more; beside a repeater the model predicts far more than any receiver reports.
+  30 % opacity under every network layer: coverage is context, the links are the story. Hovering a cell shows its
+  numbers, so the layer never relies on colour alone.
+- **One polygon per cell** (`src/map/coverage.ts`, self-checked by `npm test`): ~1.5k cells for SEA, exact cell edges,
+  hover via the map's own hit testing. A canvas image would scale to the contract's 250k-cell cap; recorded as a
+  shortcut for when a region needs it.
+- **Accessibility fix found by the new test:** a `<label>` names only its first labelable child, which in the slider
+  component was the `<output>` readout, so every slider was announced as just "slider". Sliders now carry their own
+  name, and the smoke test drives the coverage slider by keyboard, by that name.
+
 ## Reading the SEA demo data honestly
 The SEA summaries come from the synthetic fixture (`testdata/parquet/sea-seed1-2h-hash1`) run through the real
 pipeline **with** the GLO-30 DEM (analytics lane, 2026-11-11). The generator's link model ignores terrain: path loss
@@ -186,7 +207,8 @@ r = +0.89, and line-of-sight links fit worst. The map shows "model vs synthetic 
 Also from the synthetic data: two repeaters sit at ~0 m (likely in Puget Sound; the generator has no land check).
 
 ## Known gaps
-- The coverage layer stays disabled until a coverage raster exists. No contour lines (optional in the brief; skipped).
+- Coverage is drawn as cells, not contour lines (optional in the brief; skipped). On the SEA demo data nearly every
+  cell is predicted far above the floor, so the layer shows no gaps there (see `docs/benchmarks.md`, Console Phase 7).
 - Edge tiles are 0 m outside `bounds`, so the relief ends in a step at the box edge (visible when zoomed out).
 - Links are draped over the terrain, so long links follow the ground (see the Phase 3 deck.gl decision).
 - The time window is what the job produced; the API has no window parameter.
@@ -247,6 +269,18 @@ Also from the synthetic data: two repeaters sit at ~0 m (likely in Puget Sound; 
 3. **How do new job results reach an open console without a reload?** A 60 s poll of `/regions` compares
    `updated_at`; only a change fetches the summaries, which are swapped into the existing map sources, so the
    camera and the selected link survive. Hidden tabs don't poll.
+
+## Interview questions (Phase 7)
+1. **Why compute coverage from the snapped position and not the real one?** The output is a continuous field: with a
+   raw position, the cells with the strongest signal and the shape of the falloff point back to the exact spot, well
+   under the 1 km the project promises. From the cell centre the field reveals only the cell, which the map already shows.
+   A test moves a repeater around inside its cell and checks the raster doesn't change.
+2. **Why does the SEA map show no coverage gaps, and is that a bug?** It's the data: 30 repeaters in about 40 × 40 km
+   on a synthetic network, with a single-knife-edge model that is optimistic over several ridges. The analytics lane
+   flagged it before the UI was built; the benchmark records it. Real data or a Deygout model would show gaps.
+3. **Why let the user choose the margin instead of fixing a threshold?** "Covered" depends on what you need: a
+   messaging user tolerates retries, a sensor network wants fade margin. The model gives an SNR; the threshold is a
+   policy, so it sits in the UI as a filter, and the default (5 dB) matches what placement assumes.
 
 ## Interview questions (Phase 6)
 1. **What did the performance pass find?** Two real problems, both found by tests rather than by looking: an animation

@@ -12,6 +12,7 @@ export const palette = {
   cyan: '#2ee6ff',
   cyanDim: '#1b6f80',
   magenta: '#ff5adf',
+  magentaDim: '#3a1236', // low end of the predicted-coverage ramp
   lime: '#a8ff52',
   amber: '#ffb020',
 } as const;

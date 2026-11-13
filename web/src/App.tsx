@@ -128,7 +128,8 @@ export function App() {
           </p>
         )}
         <ViewControls view={view} setView={setView} onReset={() => setResetSignal((n) => n + 1)} terrain={!!loaded?.base.terrain} />
-        <Legend linkColor={layers.linkColor} predicted={layers.predicted} />
+        <Legend linkColor={layers.linkColor} predicted={layers.predicted}
+          coverageMargin={layers.coverage && data?.coverage ? layers.coverageMargin : null} />
         {selection && data && <Inspector data={data} selection={selection} onSelect={setSelection} />}
       </main>
     </div>

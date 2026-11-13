@@ -120,6 +120,22 @@ export interface Placement {
   candidates: PlacementCandidate[];
 }
 
+export interface Coverage {
+  meta: Meta;
+  method: {
+    grid_deg: number;
+    model: string;
+    dem: string;
+    tx_height_m: number;
+    rx_height_m: number;
+    max_distance_km: number;
+    snr_floor_db: number;
+    transmitters: number;
+  };
+  grid: { north: number; west: number; rows: number; cols: number }; // cell centres; row 0 is the north row
+  snr_db: (number | null)[]; // row-major, rows × cols; null = no transmitter in range
+}
+
 export const linkKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
 export interface Surprising {

@@ -94,6 +94,23 @@ test('layer toggles hide and show map layers', async ({ page }) => {
   await expect.poll(vis).toBe('visible');
 });
 
+test('predicted coverage draws cells and the margin slider hides weak ones', async ({ page }) => {
+  const shown = () => page.evaluate(() => {
+    const m = (window as Win).__map!;
+    return { vis: m.getLayoutProperty('coverage', 'visibility'), cells: m.queryRenderedFeatures({ layers: ['coverage'] }).length };
+  });
+  await page.getByLabel('Predicted coverage').check();
+  await expect.poll(async () => (await shown()).vis).toBe('visible');
+  await expect.poll(async () => (await shown()).cells).toBeGreaterThan(0);
+  await expect(page.locator('.legend')).toContainText('Predicted coverage');
+  // At the slider's top every cell must clear +20 dB over the floor; the filter is applied to the layer itself.
+  await page.getByRole('slider', { name: /Covered at/ }).press('End'); // keyboard: jump to the slider's maximum (20 dB)
+  await expect.poll(() => page.evaluate(() => JSON.stringify((window as Win).__map!.getFilter('coverage')))).toContain('20');
+  // Rendered features lag a filter change by one frame, so poll until the map has redrawn.
+  await expect.poll(() => page.evaluate(() =>
+    (window as Win).__map!.queryRenderedFeatures({ layers: ['coverage'] }).every((f) => (f.properties.margin as number) >= 20))).toBe(true);
+});
+
 test('2D view drops terrain and flattens the camera', async ({ page }) => {
   await page.getByRole('radio', { name: '2D' }).click();
   await expect.poll(() => page.evaluate(() => {

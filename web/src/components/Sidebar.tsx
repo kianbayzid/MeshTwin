@@ -38,7 +38,8 @@ function Slider({ label, value, min, max, step, unit, onChange }: {
         <span>{label}</span>
         <output className="mono live">{value.toFixed(step < 1 ? 2 : 0)}{unit}</output>
       </span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      {/* The wrapping <label> names its first labelable child, the <output>, so the slider needs its own name. */}
+      <input type="range" aria-label={label} min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
   );
 }
@@ -50,6 +51,7 @@ const DIAMOND = 'M8 1 15 8 8 15 1 8Z';
 const LINE = 'M1 7h14v2H1z';
 const RING = 'M8 2a6 6 0 1 0 0 12A6 6 0 1 0 8 2zm0 2a4 4 0 1 1 0 8 4 4 0 1 1 0-8z';
 const DOTTED = 'M1 7h2v2H1zm4 0h2v2H5zm4 0h2v2H9zm4 0h2v2h-2z';
+const SQUARE = 'M2 2h12v12H2z';
 const BADGE = 'M8 1a7 7 0 1 0 0 14A7 7 0 1 0 8 1z';
 
 export function Sidebar({ layers, setLayers, filters, setFilters, regions, region, setRegion, data, missing }: Props) {
@@ -78,8 +80,12 @@ export function Sidebar({ layers, setLayers, filters, setFilters, regions, regio
           disabled={!!missing.resilience} hint={why('resilience')} onChange={(v) => set('spofs', v)} />
         <Toggle label="Repeater candidates" icon={<Glyph d={BADGE} color="var(--lime)" />} checked={layers.placement}
           disabled={!!missing.placement} hint={why('placement')} onChange={(v) => set('placement', v)} />
-        <Toggle label="Coverage" icon={<Glyph d={BADGE} color="var(--neutral)" />} checked={layers.coverage} disabled
-          hint="No coverage raster yet" onChange={(v) => set('coverage', v)} />
+        <Toggle label="Predicted coverage" icon={<Glyph d={SQUARE} color="var(--magenta)" />} checked={layers.coverage}
+          disabled={!!missing.coverage} hint={why('coverage')} onChange={(v) => set('coverage', v)} />
+        {layers.coverage && !missing.coverage && (
+          <Slider label="Covered at" value={layers.coverageMargin} min={0} max={20} step={1} unit=" dB over floor"
+            onChange={(v) => set('coverageMargin', v)} />
+        )}
       </section>
 
       <section>
@@ -108,6 +114,7 @@ export function Sidebar({ layers, setLayers, filters, setFilters, regions, regio
           <dt>Propagation</dt><dd className="mono">{residuals ? `${residuals.model.name} v${residuals.model.version}` : '—'}</dd>
           <dt>Elevation data</dt><dd className="mono">{residuals?.model.dem ?? '—'}</dd>
           <dt>Antenna height</dt><dd className="mono live">{placement ? `${placement.method.antenna_height_m} m` : '—'}</dd>
+          <dt>Coverage handset</dt><dd className="mono">{data?.coverage ? `${data.coverage.method.rx_height_m} m, ${data.coverage.method.transmitters} repeaters` : '—'}</dd>
           <dt>Candidates scored</dt><dd className="mono">{placement?.method.candidates_scored.toLocaleString('en-US') ?? '—'}</dd>
           <dt>Fit (RMSE)</dt><dd className="mono">{residuals?.summary.rmse_db != null ? `${residuals.summary.rmse_db.toFixed(1)} dB` : '—'}</dd>
         </dl>
