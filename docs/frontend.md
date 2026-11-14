@@ -40,6 +40,13 @@ sh web/scripts/fetch-basemap.sh   # optional, once, online: OSM basemap into web
 sh web/scripts/fetch-basemap.sh us  # optional, once, online: US overview (z9, ~180 MB) into web/public/basemap/us.pmtiles
 ```
 
+Against the k3d cluster (live data, e.g. your own radio): the cluster's API answers on 127.0.0.1:8090 and serves
+its own console there, without a basemap. For streets, run the dev server against it instead; it serves
+`web/public/basemap/*.pmtiles` itself and proxies `/api` to the cluster:
+```sh
+cd web && npm run dev:cluster   # http://localhost:5173
+```
+
 ## Decisions (Phase 1)
 - **Vite + React 18 + TypeScript strict, plain CSS.** No UI kit and no Tailwind: the console has about ten
   components, and CSS custom properties are enough for one palette. `noUncheckedIndexedAccess` is on.
