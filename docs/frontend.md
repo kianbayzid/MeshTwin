@@ -13,6 +13,7 @@ real terrain, what the radio model predicted, what the mesh actually did, and wh
 | 5 | Node inspector, parameter panel, status strip on live metrics | done (2026-11-11) |
 | 6 | Performance, Helm, Playwright in CI, README media | done (2026-11-11) |
 | 7 | Predicted coverage layer (new endpoint) | done (2026-11-12) |
+| 8 | Whole-US map and city picker (no new endpoint) | done (2026-11-13) |
 
 ## Run
 ```sh
@@ -36,6 +37,7 @@ cd analytics && uv run meshtwin-analytics fetch-dem --bbox 47.3,-122.6,47.9,-121
 uv run meshtwin-analytics terrain-tiles --region SEA --dem-dir .dem --bbox 47.3,-122.6,47.9,-121.8 --out .out/terrain
 cd ../api && go run ./cmd/api -summaries-dir ../analytics/.out/terrain -listen 127.0.0.1:8080
 sh web/scripts/fetch-basemap.sh   # optional, once, online: OSM basemap into web/public/basemap/sea.pmtiles
+sh web/scripts/fetch-basemap.sh us  # optional, once, online: US overview (z9, ~180 MB) into web/public/basemap/us.pmtiles
 ```
 
 ## Decisions (Phase 1)
@@ -197,6 +199,27 @@ sh web/scripts/fetch-basemap.sh   # optional, once, online: OSM basemap into web
   component was the `<output>` readout, so every slider was announced as just "slider". Sliders now carry their own
   name, and the smoke test drives the coverage slider by keyboard, by that name.
 
+## Decisions (Phase 8)
+- **What it answers:** "where is MeshCore active, and what does MeshTwin know there?" One **Area** picker with two
+  groups: *MeshTwin data* (regions the API has; picking one loads it as before) and *MeshCore cities (LetsMesh)*
+  (100 US cities; picking one flies the camera there and says plainly that MeshTwin has no data for it yet).
+  *Whole US* goes back to the overview. With no region at all, the console now shows the US map instead of an error.
+- **No dummy nodes.** Cities are camera targets only. The map draws only what the API serves.
+- **Which cities:** the LetsMesh analyzer's own region list (IATA code, city, a count badge), snapshot 2026-11-13,
+  US regions with a count of 4+ (100 of 429). LetsMesh regions are IATA codes, like MeshTwin's, so a region with data
+  shows under its city name. Coordinates from OurAirports (public domain): the airport, which can be up to ~40 km from
+  downtown (Dulles), fine at metro zoom. Sources and terms: `docs/data-sources.md`, Console city list.
+- **Built once, committed, never fetched:** `scripts/build-cities.ts` turns a saved analyzer page and `airports.csv`
+  into `src/map/cities.ts`; `scripts/check-cities.ts` (in `npm test`) checks unique codes, every city inside the US
+  basemap, and that SEA and MCO are present. The list goes stale; re-run by hand.
+- **Two basemaps, one style:** `us.pmtiles` (contiguous US, Alaska, Hawaii; max zoom 9, 182 MB) under the region's own
+  archive (z14). Layer ids carry the source as a prefix so both fit in one style; the region draws last and covers the
+  overzoomed overview inside its box. z9 was the cut: z10 is ~385 MB and z11 ~835 MB for the contiguous US alone.
+  Outside a region, streets get blurry past zoom ~11, and there is no terrain (terrain tiles exist only per region).
+- **Flying, not reloading:** a city pick moves the camera (`flyTo`, instant under reduced motion) and leaves the
+  current region's data loaded; a region pick remounts the map on that region, as before. The map ignores a pick made
+  before it mounted, so changing region never replays an old flight.
+
 ## Reading the SEA demo data honestly
 The SEA summaries come from the synthetic fixture (`testdata/parquet/sea-seed1-2h-hash1`) run through the real
 pipeline **with** the GLO-30 DEM (analytics lane, 2026-11-11). The generator's link model ignores terrain: path loss
@@ -209,6 +232,8 @@ Also from the synthetic data: two repeaters sit at ~0 m (likely in Puget Sound; 
 ## Known gaps
 - Coverage is drawn as cells, not contour lines (optional in the brief; skipped). On the SEA demo data nearly every
   cell is predicted far above the floor, so the layer shows no gaps there (see `docs/benchmarks.md`, Console Phase 7).
+- The city list is a 2026-11-13 snapshot; the count badge's meaning (observers) is UNVERIFIED. No in-app search box:
+  the picker is a native `<select>` (type-ahead works), enough for 100 entries.
 - Edge tiles are 0 m outside `bounds`, so the relief ends in a step at the box edge (visible when zoomed out).
 - Links are draped over the terrain, so long links follow the ground (see the Phase 3 deck.gl decision).
 - The time window is what the job produced; the API has no window parameter.
@@ -269,6 +294,15 @@ Also from the synthetic data: two repeaters sit at ~0 m (likely in Puget Sound; 
 3. **How do new job results reach an open console without a reload?** A 60 s poll of `/regions` compares
    `updated_at`; only a change fetches the summaries, which are swapped into the existing map sources, so the
    camera and the selected link survive. Hidden tabs don't poll.
+
+## Interview questions (Phase 8)
+1. **Why not show nodes for all those cities?** MeshTwin only draws what its own pipeline measured; the city list
+   is where to look, not data. Pulling nodes from someone else's map needs that source's permission
+   (`docs/data-sources.md`), and placeholder nodes would make the map lie.
+2. **Why airports for city coordinates?** LetsMesh regions *are* airport codes, so OurAirports joins them exactly,
+   is public domain, and needs no geocoding service. The cost (an airport can be 40 km out) doesn't matter at metro zoom.
+3. **Why a z9 US basemap instead of full detail?** Size: z9 is 182 MB, z14 for the whole US would be tens of GB. Detail
+   matters only where there's data, and those regions keep their own z14 archive drawn on top.
 
 ## Interview questions (Phase 7)
 1. **Why compute coverage from the snapped position and not the real one?** The output is a continuous field: with a

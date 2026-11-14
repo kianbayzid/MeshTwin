@@ -9,7 +9,7 @@ import { addIcons } from '../map/icons';
 import { nearest } from '../map/pick';
 import type { BaseStyle } from '../map/style';
 import { palette } from '../palette';
-import type { Layers, Selection, View } from '../state';
+import { US_VIEW, type FlyTo, type Layers, type Selection, type View } from '../state';
 
 interface Props {
   base: BaseStyle;
@@ -19,6 +19,7 @@ interface Props {
   view: View;
   selection: Selection;
   resetSignal: number;
+  fly: FlyTo | null;
   onSelect: (s: Selection) => void;
 }
 
@@ -32,7 +33,7 @@ const snrColor: ExpressionSpecification = ['case', ['has', 'snr'],
 const residualColor: ExpressionSpecification = ['case', ['has', 'residual'],
   ['interpolate', ['linear'], ['get', 'residual'], -20, palette.magenta, 0, palette.neutral, 20, palette.cyan], palette.line];
 
-// Whole network, or the terrain box when no node has a location yet.
+// Whole network, or the terrain box when no node has a location yet; undefined: the whole US (US_VIEW).
 function home(data: Summaries, base: BaseStyle): [[number, number], [number, number]] | undefined {
   const t = base.terrain?.bounds;
   return bounds(data.topology) ?? (t && [[t[0], t[1]], [t[2], t[3]]]);
@@ -46,7 +47,7 @@ const coverageFilter = (margin: number): ExpressionSpecification => ['>=', ['get
 
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-export function MapView({ base, data, layers, filters, view, selection, resetSignal, onSelect }: Props) {
+export function MapView({ base, data, layers, filters, view, selection, resetSignal, fly, onSelect }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const ready = useRef(false);
@@ -59,6 +60,8 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
       style: base.style,
       bounds: home(data, base),
       fitBoundsOptions: { padding: 60 },
+      center: [US_VIEW.lon, US_VIEW.lat], // used only when there are no bounds
+      zoom: US_VIEW.zoom,
       attributionControl: { compact: true, customAttribution: base.attribution },
       maxPitch: 75,
     });
@@ -235,8 +238,20 @@ export function MapView({ base, data, layers, filters, view, selection, resetSig
   useEffect(() => {
     if (resetSignal === 0) return;
     const b = home(data, base);
-    if (b) whenReady((m) => m.fitBounds(b, { padding: 60, pitch: view.is3D ? PITCH_3D : 0, bearing: 0, duration: reducedMotion() ? 0 : 800 }));
+    const pitch = view.is3D ? PITCH_3D : 0;
+    const duration = reducedMotion() ? 0 : 800;
+    whenReady((m) => (b ? m.fitBounds(b, { padding: 60, pitch, bearing: 0, duration })
+      : m.easeTo({ center: [US_VIEW.lon, US_VIEW.lat], zoom: US_VIEW.zoom, pitch, bearing: 0, duration })));
   }, [resetSignal]);
+
+  // A remount (new region) must not replay the last city pick, so only a pick made after mount flies.
+  const flown = useRef(fly?.n);
+  useEffect(() => {
+    if (!fly || fly.n === flown.current) return;
+    flown.current = fly.n;
+    return whenReady((m) => m.flyTo({ center: [fly.lon, fly.lat], zoom: fly.zoom, pitch: view.is3D ? PITCH_3D : 0, bearing: 0,
+      duration: reducedMotion() ? 0 : 2500 }));
+  }, [fly?.n]);
 
   return <div ref={el} className="map" role="region" aria-label="Network map" />;
 }

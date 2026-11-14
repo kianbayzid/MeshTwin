@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Missing, Summaries } from '../api/client';
 import type { RegionInfo } from '../api/types';
+import { CITIES } from '../map/cities';
 import { SNR_FLOOR, type Filters } from '../map/geojson';
 import type { Layers } from '../state';
 
@@ -10,8 +11,8 @@ interface Props {
   filters: Filters;
   setFilters: (f: Filters) => void;
   regions: RegionInfo[];
-  region: string | null;
-  setRegion: (r: string) => void;
+  area: string; // region or city code; '' = the whole US
+  onPick: (code: string) => void;
   data: Summaries | undefined;
   missing: Missing;
 }
@@ -54,7 +55,15 @@ const DOTTED = 'M1 7h2v2H1zm4 0h2v2H5zm4 0h2v2H9zm4 0h2v2h-2z';
 const SQUARE = 'M2 2h12v12H2z';
 const BADGE = 'M8 1a7 7 0 1 0 0 14A7 7 0 1 0 8 1z';
 
-export function Sidebar({ layers, setLayers, filters, setFilters, regions, region, setRegion, data, missing }: Props) {
+// Region codes are IATA codes, like the city list's, so a region with data gets its city's name.
+const placeName = (code: string) => {
+  const c = CITIES.find((x) => x.code === code);
+  return c ? `${c.name}, ${c.state} (${code})` : code;
+};
+
+export function Sidebar({ layers, setLayers, filters, setFilters, regions, area, onPick, data, missing }: Props) {
+  // A region still waiting for its first topology run stays pickable as a city, so you can fly there.
+  const withData = new Set(regions.filter((r) => r.summaries.includes('topology')).map((r) => r.region));
   const set = <K extends keyof Layers>(k: K, v: Layers[K]) => setLayers({ ...layers, [k]: v });
   const residuals = data?.residuals;
   const placement = data?.placement;
@@ -91,11 +100,19 @@ export function Sidebar({ layers, setLayers, filters, setFilters, regions, regio
       <section>
         <h2>Filters</h2>
         <label className="select">
-          <span>Region</span>
-          <select value={region ?? ''} disabled={regions.length < 2} onChange={(e) => setRegion(e.target.value)}>
-            {regions.map((r) => (
-              <option key={r.region} value={r.region} disabled={!r.summaries.includes('topology')}>{r.region}</option>
-            ))}
+          <span>Area</span>
+          <select value={area} onChange={(e) => onPick(e.target.value)}>
+            <option value="">Whole US</option>
+            {withData.size > 0 && (
+              <optgroup label="MeshTwin data">
+                {[...withData].map((code) => <option key={code} value={code}>{placeName(code)}</option>)}
+              </optgroup>
+            )}
+            <optgroup label="MeshCore cities (LetsMesh)">
+              {CITIES.filter((c) => !withData.has(c.code)).map((c) => (
+                <option key={c.code} value={c.code}>{c.name}, {c.state}</option>
+              ))}
+            </optgroup>
           </select>
         </label>
         <label className="select">

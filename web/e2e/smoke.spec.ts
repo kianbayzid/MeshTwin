@@ -86,6 +86,20 @@ test('loads the region, terrain and the status strip', async ({ page }) => {
   await expect(page.getByText('Copernicus WorldDEM-30', { exact: false })).toBeVisible();
 });
 
+test('area picker flies to a city without data and back to the region', async ({ page }) => {
+  const center = () => page.evaluate(() => {
+    const m = (window as Win).__map!;
+    return m.isMoving() ? null : m.getCenter().toArray().map((x) => Math.round(x * 10) / 10);
+  });
+  const area = page.getByRole('combobox', { name: 'Area' });
+  await area.selectOption('MCO'); // Orlando: in the city list, no MeshTwin data in the fixtures
+  await expect.poll(center, { timeout: 10_000 }).toEqual([-81.3, 28.4]);
+  await expect(page.getByRole('status').filter({ hasText: 'No MeshTwin data for Orlando, FL yet' })).toBeVisible();
+  await area.selectOption('SEA'); // the fixture region: the camera fits its network again
+  await expect.poll(async () => (await center())?.[0], { timeout: 10_000 }).toBeLessThan(-121);
+  await expect(page.getByText('No MeshTwin data for')).toHaveCount(0);
+});
+
 test('layer toggles hide and show map layers', async ({ page }) => {
   const vis = () => page.evaluate(() => (window as Win).__map!.getLayoutProperty('placement', 'visibility'));
   await page.getByLabel('Repeater candidates').uncheck();

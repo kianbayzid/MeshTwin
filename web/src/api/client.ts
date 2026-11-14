@@ -51,6 +51,21 @@ export interface Summaries {
   coverage: Coverage | null;
 }
 
+// No region has data yet: an empty network, so the map still draws (US basemap, city jumps) with nothing on it.
+export const NO_DATA: Summaries = {
+  topology: {
+    meta: { schema_version: 0, region: '', generated_at: '', window: null, source: '' },
+    stats: { receptions: 0, flood_receptions: 0, observers: 0, nodes: 0, links: 0, ambiguous_hop_share: 0, unresolved_hops: 0 },
+    nodes: [],
+    links: [],
+  },
+  resilience: null,
+  residuals: null,
+  surprising: null,
+  placement: null,
+  coverage: null,
+};
+
 export type Missing = Partial<Record<Exclude<keyof Summaries, 'topology'>, string>>;
 
 // Topology is required to draw anything; the others are optional layers, so one missing job never blanks the map.

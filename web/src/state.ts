@@ -14,6 +14,17 @@ export interface View {
   exaggeration: number;
 }
 
+// A camera move the map should make; n changes on every request, so picking the same city twice flies again.
+export interface FlyTo {
+  lon: number;
+  lat: number;
+  zoom: number;
+  n: number;
+}
+
+// The contiguous US, for the "whole US" pick and a map with no data yet.
+export const US_VIEW = { lon: -98.6, lat: 39.5, zoom: 3.4 };
+
 export type Selection = { kind: 'link'; a: string; b: string } | { kind: 'node'; id: string } | null;
 
 export const initialLayers: Layers = {

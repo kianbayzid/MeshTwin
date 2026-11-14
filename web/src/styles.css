@@ -264,6 +264,19 @@ h3 { font-size: 14px; color: var(--ink-dim); margin-top: var(--s5); }
   color: var(--ink-dim);
 }
 .stage-msg.warn { border-color: var(--amber); color: var(--amber); }
+/* A note over the live map (no data for the picked city): top right, clear of the view controls (top left). */
+.stage-note {
+  position: absolute;
+  top: var(--s3);
+  right: var(--s3);
+  max-width: min(360px, calc(100% - 2 * var(--s3)));
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  pointer-events: none;
+}
 .seg button:disabled, .action:disabled { cursor: not-allowed; opacity: 0.5; box-shadow: none; }
 .legend-keys li.wide { grid-column: 1 / -1; }
 
@@ -314,6 +327,8 @@ h3 { font-size: 14px; color: var(--ink-dim); margin-top: var(--s5); }
 @media (max-width: 800px) {
   .maplibregl-ctrl-bottom-right { left: 0; }
   .stage:has(.inspector) .maplibregl-ctrl-bottom-right { right: 0; }
+  /* The view controls fill the top here: sit below them, right of the zoom buttons. */
+  .stage-note { top: 112px; left: 56px; max-width: none; }
 }
 
 /* SPOF pulse: a MapLibre Marker (positioned via its own transform) holding a span that the compositor animates. */
