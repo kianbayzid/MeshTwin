@@ -1,4 +1,6 @@
-{{- /* One image, three CronJobs that differ only in the subcommand, schedule and size. */ -}}
+{{- /* One image, four CronJobs that differ only in the subcommand, schedule and size. */ -}}
+{{- /* DEM box: from the region's located nodes (--root), or the bbox override. */ -}}
+{{- $box := ternary (list (printf "--bbox=%s" .Values.bbox)) (list (printf "--root=s3://%s" .Values.s3.bucket) (printf "--region=%s" .Values.region)) (ne .Values.bbox "") }}
 # Copernicus GLO-30 tile cache, shared by the jobs that use terrain. fetch-dem
 # skips tiles already present, so only the first run downloads (~40 MB/tile).
 apiVersion: v1
@@ -50,7 +52,14 @@ spec:
             - name: fetch-dem
               image: {{ $.Values.images.analytics }}
               imagePullPolicy: {{ $.Values.pullPolicy }}
-              args: [fetch-dem, {{ printf "--bbox=%s" $.Values.bbox | quote }}, --dem-dir, /dem]
+              # With --root and no located node yet it exits 0 without downloading.
+              args:
+                - fetch-dem
+                - --dem-dir=/dem
+                {{- range $box }}
+                - {{ . | quote }}
+                {{- end }}
+              env: {{- include "meshtwin.s3Env" $ | nindent 16 }}
               resources: {{- toYaml $.Values.analytics.fetchDemResources | nindent 16 }}
               securityContext: {{- include "meshtwin.containerSecurity" $ | nindent 16 }}
               volumeMounts:
@@ -63,7 +72,11 @@ spec:
               imagePullPolicy: {{ $.Values.pullPolicy }}
               args:
                 - {{ $name }}
+                {{- if and (eq $name "terrain-tiles") $.Values.bbox }}
+                - {{ printf "--bbox=%s" $.Values.bbox | quote }} # override; --bbox and --root are exclusive
+                {{- else }}
                 - --root=s3://{{ $.Values.s3.bucket }}
+                {{- end }}
                 - --out=s3://{{ $.Values.s3.bucket }}
                 - --region={{ $.Values.region }}
                 {{- if $job.dem }}

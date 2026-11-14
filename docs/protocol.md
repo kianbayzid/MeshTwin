@@ -181,7 +181,19 @@ in `CLAUDE.md`). We do not verify signatures yet (a shortcut noted in code).
 ## 5. Observer MQTT feed
 
 Sources: [`Cisien/meshcoretomqtt`](https://github.com/Cisien/meshcoretomqtt) README and the
-[agessaman MQTT observer firmware docs](https://observer.gessaman.com/docs.html).
+[agessaman MQTT observer firmware docs](https://observer.gessaman.com/docs.html). Re-checked against source on
+2026-11-12: meshcoretomqtt @ `9b4e022` (`bridge/message_parser.py`), [`agessaman/meshcore-packet-capture`](https://github.com/agessaman/meshcore-packet-capture)
+@ `122d959` (`format_packet_data()`), MeshCore @ `d2096bd` (`src/Dispatcher.cpp`, `examples/*/MyMesh.cpp`).
+
+**Which bridge needs which firmware:**
+- **meshcoretomqtt** reads the packet log a **repeater** prints over serial. That log exists only in a custom build with
+  `-D MESH_PACKET_LOGGING=1` (commented out in every stock env; `variants/heltec_v3/platformio.ini`), and the project
+  supports Linux/macOS/Docker only.
+- **meshcore-packet-capture** works with **stock companion USB firmware**: the companion pushes every received frame
+  to the USB host (`PUSH_CODE_LOG_RX_DATA` = 0x88, then `snr × 4` as int8, `rssi` as int8, then the raw bytes;
+  `examples/companion_radio/MyMesh.cpp` `logRxRaw()`, called from `Dispatcher::checkRecv()` for every frame). It runs
+  on Windows ("manual / development only", `install.ps1`) and publishes the same topic and JSON shape. This is the
+  project's Windows route (`docs/recording.md`).
 
 **Topics:** `meshcore/{IATA}/{OBSERVER_PUBKEY}/packets`, plus `/status` (and `/debug` in meshcoretomqtt).
 IATA is a 3-letter airport code standing in for the region. That gives a natural region filter:
@@ -197,15 +209,17 @@ subscribe to `meshcore/SEA/+/packets`.
 
 Quirks the ingester must handle:
 - **All numbers are strings.**
-- **`timestamp` format varies:** meshcoretomqtt omits the UTC offset (Python `isoformat()` of
-  probably-local time, **UNVERIFIED**); the agessaman firmware sends `+00:00`. Phase 2 policy: use the
-  observer timestamp if it has an offset, otherwise fall back to the ingester's receive time.
-- **`path` varies:** a `"C2 -> E2"` string (meshcoretomqtt) or a `["c2","e2"]` array (agessaman), and it
-  appears only on direct-route packets. → **We ignore it and decode `raw`.**
-- `route` letters: `F` = flood **and transport flood**, `D` = direct **and transport direct**; a `D` packet
-  also carries `path` ([meshcore-ha MQTT docs](https://meshcore-dev.github.io/meshcore-ha/docs/ha/mqtt/), checked 2026-11-08).
-  We still derive the route from `raw`, because the letter loses the transport distinction.
-- Some tools add fields (meshcore-ha sends `duration`). Unknown fields are ignored.
+- **`timestamp`:** current meshcoretomqtt sends `datetime.now(timezone.utc).isoformat()` (with offset); the agessaman
+  firmware sends `+00:00`. Older versions omitted the offset. Policy: use the observer timestamp if it has an offset,
+  otherwise the ingester's receive time. It is the **bridge's** processing time, not the radio's.
+- **`path` is not the hop path.** In meshcoretomqtt it's the firmware's `[src -> dst]` hash pair, printed only for
+  PATH/REQ/RESPONSE/TXT_MSG; packet-capture sends `"C2,E2"` on direct routes; the observer firmware an array.
+  → **We ignore it and decode `raw`.**
+- `route` letters: `F` = flood and transport flood, `D` = direct; packet-capture also sends `T` (transport direct)
+  and `U` (unknown). We derive the route from `raw` (the letters lose or vary the transport distinction).
+- **SNR precision varies:** meshcoretomqtt's comes from the log line as an integer (`(int)pkt->getSNR()`), losing the
+  radio's 0.25 dB steps; packet-capture sends a float string, or `"Unknown"` (parsed as missing).
+- Some tools add fields (meshcore-ha and meshcoretomqtt send `duration`, the airtime). Unknown fields are ignored.
 - `SNR`/`RSSI`/`score` appear on rx only. SNR is the **last hop only** (the radio measures only
   the final transmission). `score` is a rebroadcast score ×1000. We don't use it.
 - `direction: "tx"` messages are the observer's own transmissions. They are dropped at ingest
@@ -222,7 +236,8 @@ Quirks the ingester must handle:
 |---|---|---|
 | Observer `hash` == `calculatePacketHash` | `anonymize` prints `hash_mismatches_in_original`; `TestRecordedCaptures` asserts 0 | when a capture exists |
 | Observers publish duplicates (meshcore-ha: no, within 1 s) | count `(hash, observer)` repeats in the capture | when a capture exists |
-| Timestamp timezone in meshcoretomqtt | its source, `datetime.now()` call (handled either way: no offset → receive time) | when a capture exists |
+| ~~Timestamp timezone in meshcoretomqtt~~ **Resolved 2026-11-12:** UTC with offset in current versions (`bridge/message_parser.py`); older ones still handled (no offset → receive time) | source | done |
+| packet-capture `hash` == firmware `calculatePacketHash` (computed in Python there) | `hash_mismatches_in_original` on a capture | when a capture exists |
 | ~~Room servers forward floods?~~ **Resolved 2026-11-08:** not by default (see §2) | `examples/simple_room_server` | done |
 | ~~US default radio preset~~ **Resolved 2026-11-08:** 910.525 MHz, BW 62.5 kHz, SF7, CR5 (official preset API `api.meshcore.nz/api/v1/config`, `docs/faq.md` §2.3; Puget Mesh uses the same). The **build** default is EU (869.618 MHz, SF8, `platformio.ini`): US radios get the preset from the app/flasher, so never infer frequency from firmware. TX 22 dBm on Heltec V3 / RAK4631 (`variants/*/platformio.ini`), boosted RX gain on. SX1262 demod SNR floor SF7 -7.5 dB ... SF12 -20 dB (datasheet Rev 1.2 Table 6-1); NF about 6-6.5 dB, derived from Table 3-8 sensitivity (not stated). Antenna gain and cable loss are not in firmware: **UNVERIFIED** per site. | preset API, faq.md, SX1262 datasheet | done |
 | Transport code semantics | `examples/*` `allowPacketForward` | only if needed |

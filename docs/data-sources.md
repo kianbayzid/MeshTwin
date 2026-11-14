@@ -9,7 +9,7 @@ Two live settings, both in `deploy/compose/` (how-to: `docs/recording.md`):
 
 | source | setting | access | terms | status |
 |---|---|---|---|---|
-| **Your own observer** (meshcoretomqtt / MQTT observer firmware / meshcore-ha → your broker) | 1 `own-observer` | full | yours | ✅ ready |
+| **Your own observer** (USB radio on stock companion firmware + meshcore-packet-capture on Windows; meshcoretomqtt on Linux with a packet-logging repeater build; or MQTT observer firmware / meshcore-ha → your broker) | 1 `own-observer` | full | yours. packet-capture: adverts off (`ADVERT_INTERVAL_HOURS=0`), message drain off, decoding off, LetsMesh preset declined (`docs/recording.md`) | ✅ ready |
 | **LetsMesh** `wss://mqtt-us-v1.letsmesh.net:443/` | 2 `public-broker` | observers **publish** with a node-key-signed JWT (username `v1_<PUBKEY>`); **reading needs a subscribe-only account created by the operator**. Roles: 1 admin, 2 full access, 3 limited (**SNR/RSSI/score stripped**). We need role 2. Source: [meshcore-mqtt-broker README](https://github.com/michaelhart/meshcore-mqtt-broker) (MIT), checked 2026-11-08 | The software is MIT. The data is collected from volunteer observers, and the site says it is "free, ad-free, and commercial data exploitation free". No written data-use terms were found, so **ask the operator** and describe the use | ⏳ needs an account from the operator |
 | **MeshMapper** `wss://mqtt.meshmapper.net:443/` | 2 `public-broker` (change `MQTT_URL`) | observers publish with device signing. No third-party read access documented; region admins configure brokers. Source: [MeshMapper wiki](https://wiki.meshmapper.net/mqtt-main/), checked 2026-11-08 | none published | ⏳ ask region admins |
 | **Recorded capture** (`testdata/recorded/`) | replay | local | anonymized before commit | ⏳ waiting for a recording |
@@ -70,6 +70,33 @@ The map also shows the Copernicus attribution (Terrain section), because residua
   - `actions/setup-node` v7.1.0 pinned to `949feb2413d6458794dcd2491c4babbbce0c15c1`.
 - The console makes **no third-party requests** at runtime: basemap, terrain tiles, fonts and icons are all same-origin.
   No external terrain fallback exists; without terrain tiles the map is flat.
+- **US overview basemap** (added 2026-11-13): the same Protomaps build, extracted once as `us.pmtiles` for the
+  contiguous US, Alaska and Hawaii at max zoom 9 (182 MB; z10 would be ~385 MB, z11 ~835 MB for the contiguous US
+  alone). Region archives (z14) draw on top of it. Same licence and attribution.
+
+## Console city list (checked 2026-11-13)
+
+The console's "jump to a city" list: camera targets only, no nodes. Built once, by hand, and committed as a static file;
+the console never fetches either source.
+
+| source | used for | terms | status |
+|---|---|---|---|
+| LetsMesh analyzer region list (`analyzer.letsmesh.net`, the region picker: IATA code, city, count badge), snapshot 2026-11-13 | which US cities have MeshCore activity: 100 US regions with a badge of 4 or more (of 429 US regions) | No written terms (see LetsMesh above). Only city names and codes are kept, plus the count shown next to each; no packets, nodes or observer identities. The badge's meaning (observers, per its `status/observers` page) is **UNVERIFIED** | ✅ one-off snapshot, re-run by hand |
+| [OurAirports](https://ourairports.com/data/) `airports.csv` | each code's coordinates (the airport, a few km to ~40 km from downtown; the camera shows a metro area). `NYC` is a city code with no airport, so it uses Manhattan | "All data is released to the Public Domain, and comes with no guarantee of accuracy or fitness for use" | ✅ |
+
+## Satellite telemetry (plan step 4, checked 2026-11-12)
+
+| source | setting | access | terms | status |
+|---|---|---|---|---|
+| **TinyGS network data** (`tinygs.com`, `api.tinygs.com`) | none | No documented public API, external MQTT feed or bulk export ([README](https://github.com/tinygs/tinyGS): "we are developing an API to access data"). An undocumented `api.tinygs.com/v2/packets?satellite=…` exists; the maintainer [said](https://github.com/tinygs/tinyGS/issues/259) it "can be used" but usage is "quite restrictive to avoid impacting the network". Checked 2026-11-12 | [Terms](https://tinygs.com/terms), [Privacy](https://tinygs.com/privacy) (2025-01-06): station owners licence their data **to TinyGS**; no reuse licence for third parties. Station locations public at 3 decimals (~110 m). Ask terms@tinygs.com in writing first | ❌ no access without written permission; do not poll or scrape |
+| **Our own TinyGS station** (Heltec WiFi LoRa 32 V3, **433 MHz variant**) | own station | Uploads to `mqtt.tinygs.com:8883` (credentials from `@tinygs_personal_bot`). Stock firmware shows only the last packet locally. Full history needs the GPL fork [`sundruid/tinyGS` aux-mqtt-v0.1.0](https://github.com/sundruid/tinyGS/releases/tag/aux-mqtt-v0.1.0) publishing to our Mosquitto (code not yet reviewed) | Firmware GPL-3.0. Joining is by invite/Telegram. Uploads must be real-time and unmodified (Privacy Policy). Our location published at ~110 m; MeshTwin outputs still snap to ~1 km | ⏳ buy the 433 MHz board; review the fork; decide OTA auto-update and auto-tune |
+| **CelesTrak GP data** (`https://celestrak.org/NORAD/elements/gp.php?CATNR=<n>&FORMAT=CSV`) | analytics fetch | Public, no account. Checked 2026-11-12 | [Usage policy](https://celestrak.org/usage-policy.php): one download per 2-hour update; directory queries at most hourly; stop on any non-200 and alert a human (>50 errors in 2 h → firewall); >100 MB/day risks a block. Catalog numbers ≥ 100000 have **no TLE format**: use CSV/JSON (OMM). Redistribution licence **UNVERIFIED** | ✅ fetch under the rules below; ⏳ before committing or serving raw elements |
+
+CelesTrak politeness rules:
+- Fetch only the satellites the phase uses, by `CATNR`; never `GROUP=active`.
+- Cache to disk; re-fetch only when the cache is more than 2 h old, and only when a job runs.
+- Any non-200 stops the fetch with no retry and logs/alerts. `https://celestrak.org` only, never `.com`.
+- Raw element sets are not committed or served by the API; tests use synthetic elements.
 
 ## Privacy rules that apply to all sources
 - Metadata only. Payloads are not decrypted and not stored.

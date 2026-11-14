@@ -92,6 +92,10 @@ class TopologyRun:
         return self.cache_hits / total if total else 0.0
 
 
+class NoReceptionsError(ValueError):
+    """The region has no data yet (a fresh live region)."""
+
+
 def default_window(root: str, region: str, window_us: int) -> tuple[int, int]:
     """[end - window, end) where end = max rx_time rounded up to the next second.
 
@@ -100,7 +104,7 @@ def default_window(root: str, region: str, window_us: int) -> tuple[int, int]:
     con = connect(root)
     last = load.max_rx_us(con, root, region)
     if last is None:
-        raise ValueError(f"no receptions for region {region} under {root}")
+        raise NoReceptionsError(f"no receptions for region {region} under {root}")
     to = (last // 1_000_000 + 1) * 1_000_000
     return to - window_us, to
 

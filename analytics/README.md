@@ -194,8 +194,28 @@ uv run meshtwin-analytics propagation --root ../testdata/parquet/sea-seed1-2h-ha
 writes `summaries/region=SEA/residuals.json` and `surprising.json` (`docs/api-contract.md`). Without
 `--dem-dir` the ground is flat (sea level) and `model.dem` says `"flat (no DEM)"`. `fetch-dem`
 downloads the 1°×1° tiles covering the box from AWS Open Data (one at a time, to `.part` then
-renamed, skipping tiles already there; a 404 means open sea and is skipped). **Keep the cache
-outside the repo; DEM tiles are never committed.**
+renamed, skipping tiles already there; a 404 means open sea and leaves an empty `<tile>.notile`
+marker so it isn't asked again). **Keep the cache outside the repo; DEM tiles are never committed.**
+
+**Box from the data.** `fetch-dem` and `terrain-tiles` take exactly one of `--bbox B` or `--root ROOT`
+(with `--region`, the window options of `topology`, and `--pad-deg`, default 0.05°). With `--root` the
+box is the bounding box of the region's located nodes (the same pipeline and `_located` the DEM jobs
+use), padded, then snapped outward to 0.1°, so it never carries a raw node coordinate and is the only
+box that is printed. 0.05° covers placement's 2-cell DEM pad and the coverage grid's 1 cell plus
+rounding (`test_box_pad_covers_dem_jobs`). A region with no located node yet (or no data at all)
+logs `no located nodes in REGION yet: nothing to fetch` (`nothing to render`), prints
+`"box": null, "skipped": ...` and exits 0: the next CronJob run tries again.
+
+```sh
+uv run meshtwin-analytics fetch-dem --root ../testdata/parquet/sea-seed1-2h-hash1 --region SEA     --dem-dir "$LOCALAPPDATA/meshtwin/dem"
+```
+
+**Missing DEM tiles fall back to flat, never to a silent 0 m.** If `--dem-dir` lacks a tile of the
+box that fetch-dem never fetched (neither `.tif` nor `.notile`: a fresh region, or a node newer than
+the last fetch), `propagation` and `placement` log a warning and run on flat terrain with
+`dem: "flat (no DEM)"` in their outputs (placement then skips its open-water filter, which would read
+flat 0 m as water everywhere). `terrain-tiles` instead refuses (exit 1): publishing flat map tiles
+would look like real ground.
 
 **Reader: `tifffile` + `imagecodecs`.** GLO-30 COGs use DEFLATE with the floating-point predictor,
 which tifffile decodes only with imagecodecs; both are pure wheels that load fine under Windows

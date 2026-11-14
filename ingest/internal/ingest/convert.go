@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -204,8 +205,8 @@ func receptionID(observerID, timestamp string, raw []byte) [16]byte {
 }
 
 // rxTime uses the observer's timestamp when it carries a UTC offset, and the
-// receive time otherwise: meshcoretomqtt omits the offset, and guessing the
-// observer's timezone would silently shift data by hours.
+// receive time otherwise: current meshcoretomqtt sends one, older versions did
+// not, and guessing the observer's timezone would silently shift data by hours.
 func rxTime(ts string, recv time.Time) time.Time {
 	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
 		return t.UTC()
@@ -213,9 +214,16 @@ func rxTime(ts string, recv time.Time) time.Time {
 	return recv.UTC()
 }
 
+// parseFinite parses a broker-supplied number; junk and the "NaN"/"Inf"
+// spellings ParseFloat accepts become missing, never a stored non-finite value.
+func parseFinite(s string, bitSize int) (float64, bool) {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), bitSize)
+	return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
 func parseFloat32(s string) *float32 {
-	f, err := strconv.ParseFloat(strings.TrimSpace(s), 32)
-	if err != nil {
+	f, ok := parseFinite(s, 32)
+	if !ok {
 		return nil
 	}
 	v := float32(f)
@@ -223,8 +231,8 @@ func parseFloat32(s string) *float32 {
 }
 
 func parseInt16(s string) *int16 {
-	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64) // tolerate "-93.0"
-	if err != nil || f < -32768 || f > 32767 {
+	f, ok := parseFinite(s, 64) // tolerate "-93.0"
+	if !ok || f < -32768 || f > 32767 {
 		return nil
 	}
 	v := int16(f)

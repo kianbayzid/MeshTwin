@@ -6,6 +6,7 @@ Times are handled as integer microseconds since the epoch (UTC) inside analytics
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 import duckdb
 
@@ -46,10 +47,22 @@ def _src(root: str, table: str) -> str:
 
 
 def max_rx_us(con: duckdb.DuckDBPyConnection, root: str, region: str) -> int | None:
-    row = con.execute(
-        f"SELECT epoch_us(max(rx_time)) FROM {_src(root, 'receptions')} WHERE region = ?",
-        [region],
-    ).fetchone()
+    """Latest reception time, or None if the region (or the whole root) has none yet."""
+    try:
+        row = con.execute(
+            f"SELECT epoch_us(max(rx_time)) FROM {_src(root, 'receptions')} WHERE region = ?",
+            [region],
+        ).fetchone()
+    except duckdb.IOException as e:
+        # An empty root (fresh cluster before the first flush) has nothing to glob: no data,
+        # like an empty region. Any other IO error (S3, auth, permissions) still raises.
+        if "No files found that match the pattern" not in str(e):
+            raise
+        # DuckDB says the same for a local root that is missing or a file: a typo or a missing
+        # mount must fail, not skip forever.
+        if not root.startswith("s3://") and not Path(root).is_dir():
+            raise FileNotFoundError(f"--root {root} is not an existing directory") from e
+        return None
     return None if row is None or row[0] is None else int(row[0])
 
 

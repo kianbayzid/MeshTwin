@@ -20,15 +20,24 @@ from .output import write_all, write_summaries
 from .pipeline import (
     DAY_US,
     DEFAULT_ADVERT_LOOKBACK_US,
+    NoReceptionsError,
     TopologyRun,
     default_window,
     run_topology,
 )
 from .propagation import FsplKnifeEdge, Radio
 from .storage import output_fs
-from .terrain import FlatTerrain, Terrain, fetch_glo30, load_glo30, tile_name, tiles_for_bbox
+from .terrain import FlatTerrain, Terrain, fetch_glo30, load_glo30, missing_tiles
 
 log = logging.getLogger(__name__)
+
+FLAT = "flat (no DEM)"
+# Placement loads the DEM over the nodes' box plus two cells (candidates reach one cell beyond).
+PLACEMENT_DEM_PAD_DEG = 2 * GRID_DEG
+# fetch-dem/terrain-tiles --root: pad the nodes' box by this. It must cover what the DEM jobs
+# load: placement's 2-cell pad and the coverage grid (1 cell + half a cell of rounding);
+# test_box_pad_covers_dem_jobs checks it. 0.05 deg (~5 km) leaves margin.
+DEFAULT_PAD_DEG = 0.05
 
 _UNITS_US = {"m": 60_000_000, "h": 3_600_000_000, "d": 86_400_000_000}
 
@@ -53,6 +62,20 @@ def _parser() -> argparse.ArgumentParser:
 
     def common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--root", required=True, help="Parquet root: directory or s3://bucket")
+        window(sp)
+
+    def box(sp: argparse.ArgumentParser) -> None:
+        g = sp.add_mutually_exclusive_group(required=True)
+        g.add_argument("--bbox", type=bbox, help="minlat,minlon,maxlat,maxlon")
+        g.add_argument(
+            "--root",
+            help="Parquet root: the box is the region's located nodes (window options as "
+            "topology), padded by --pad-deg and snapped outward to 0.1 degree",
+        )
+        sp.add_argument("--pad-deg", type=float, default=DEFAULT_PAD_DEG, help="default 0.05")
+        window(sp)
+
+    def window(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--region", default="SEA")
         sp.add_argument("--from", dest="frm", type=iso_us, help="window start (ISO 8601)")
         sp.add_argument("--to", type=iso_us, help="window end, exclusive (ISO 8601)")
@@ -81,12 +104,11 @@ def _parser() -> argparse.ArgumentParser:
     common(e)
     e.add_argument("--truth", required=True)
     f = sub.add_parser("fetch-dem", help="download Copernicus GLO-30 tiles covering a box")
-    f.add_argument("--bbox", type=bbox, required=True, help="minlat,minlon,maxlat,maxlon")
+    box(f)
     f.add_argument("--dem-dir", type=Path, required=True)
     tt = sub.add_parser("terrain-tiles", help="Terrain-RGB PNG tiles from GLO-30 for the 3D map")
-    tt.add_argument("--region", default="SEA")
+    box(tt)
     tt.add_argument("--dem-dir", type=Path, required=True)
-    tt.add_argument("--bbox", type=bbox, required=True, help="minlat,minlon,maxlat,maxlon")
     tt.add_argument("--minzoom", type=int, default=8)
     tt.add_argument("--maxzoom", type=int, default=12)
     tt.add_argument("--out", required=True, help="output root: directory or s3://bucket")
@@ -112,19 +134,63 @@ def _located(run: TopologyRun) -> list[tuple[float, float]]:
     ]
 
 
+def node_bbox(
+    points: list[tuple[float, float]], pad_deg: float
+) -> tuple[float, float, float, float] | None:
+    """Box of the points plus pad_deg, snapped outward to 0.1 degree; None without points.
+
+    The snap means the box (logged, printed, used for tile names) never carries a raw
+    node coordinate. shortcut: no antimeridian handling, upgrade for a region spanning 180.
+    """
+    if not points:
+        return None
+    lats, lons = [p[0] for p in points], [p[1] for p in points]
+    w, s, e, n = terrain_tiles.snap_bounds_outward(
+        min(lats) - pad_deg, min(lons) - pad_deg, max(lats) + pad_deg, max(lons) + pad_deg
+    )
+    return s, w, n, e
+
+
+def _box(args: argparse.Namespace, nothing: str) -> tuple[float, float, float, float] | None:
+    """--bbox as given, or the box of the region's located nodes (node_bbox). None, with a
+    warning naming `nothing` (what is skipped), while the region has no located node yet."""
+    if args.bbox is not None:
+        given: tuple[float, float, float, float] = args.bbox
+        return given
+    if args.pad_deg < 0:
+        raise SystemExit("--pad-deg must be >= 0")
+    try:
+        points = _located(_run(args))
+    except NoReceptionsError:
+        points = []
+    b = node_bbox(points, args.pad_deg)
+    if b is None:
+        log.warning("no located nodes in %s yet: %s", args.region, nothing)
+    return b
+
+
 def _terrain(run: TopologyRun, dem_dir: Path | None, pad_deg: float = 0.0) -> tuple[Terrain, str]:
-    """GLO-30 over the located nodes' box (plus pad_deg), or flat terrain without --dem-dir."""
+    """GLO-30 over the located nodes' box (plus pad_deg), or flat terrain.
+
+    Flat, labelled FLAT, without --dem-dir, without located nodes, or when fetch-dem hasn't
+    fetched a tile of the box yet (fresh region, or a node newer than the last fetch):
+    honestly flat beats unfetched tiles silently read as 0 m.
+    """
     points = _located(run)
     if dem_dir is None:
-        return FlatTerrain(), "flat (no DEM)"
+        return FlatTerrain(), FLAT
     if not points:
         log.warning("--dem-dir given but no node has a location: using flat terrain")
-        return FlatTerrain(), "flat (no DEM)"
+        return FlatTerrain(), FLAT
     lats, lons = [p[0] for p in points], [p[1] for p in points]
-    terrain = load_glo30(
-        dem_dir, min(lats) - pad_deg, min(lons) - pad_deg, max(lats) + pad_deg, max(lons) + pad_deg
-    )
-    return terrain, "Copernicus GLO-30"
+    b = (min(lats) - pad_deg, min(lons) - pad_deg, max(lats) + pad_deg, max(lons) + pad_deg)
+    missing = missing_tiles(dem_dir, *b)
+    if missing:
+        log.warning(
+            "DEM tiles not fetched in %s (run fetch-dem): %s; using flat terrain", dem_dir, missing
+        )
+        return FlatTerrain(), FLAT
+    return load_glo30(dem_dir, *b), "Copernicus GLO-30"
 
 
 def _propagation(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, Any]:
@@ -181,7 +247,7 @@ def _propagation(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, 
 def _placement(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, Any]:
     t0 = time.perf_counter()
     # Pad by two cells: candidates reach one cell beyond the nodes' box.
-    terrain, dem = _terrain(run, dem_dir, pad_deg=2 * GRID_DEG)
+    terrain, dem = _terrain(run, dem_dir, pad_deg=PLACEMENT_DEM_PAD_DEG)
     t_dem = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -189,7 +255,7 @@ def _placement(run: TopologyRun, dem_dir: Path | None, out: str) -> dict[str, An
     model = FsplKnifeEdge(terrain, radio)
     sites = {k: s for k in run.graph.nodes if (s := compare.site(run.nodes[k], radio)) is not None}
     cells = placement.grid_cells(_located(run))
-    if dem_dir is not None:
+    if dem != FLAT:  # flat terrain is all 0 m: it would read every cell as water
         cells = placement.on_land(cells, terrain)
     candidates = placement.recommend(run.graph, sites, cells, run.resilience.spofs, model, radio)
     t_model = time.perf_counter() - t0
@@ -264,13 +330,12 @@ def _terrain_tiles(args: argparse.Namespace) -> dict[str, Any]:
     """Write summaries/region=R/terrain/{z}/{x}/{y}.png and terrain.json (docs/api-contract.md)."""
     if not 0 <= args.minzoom <= args.maxzoom <= terrain_tiles.MAX_ZOOM:
         raise SystemExit(f"need 0 <= --minzoom <= --maxzoom <= {terrain_tiles.MAX_ZOOM}")
-    west, south, east, north = bounds = terrain_tiles.snap_bounds_outward(*args.bbox)
-    # Refuse rather than publish flat tiles: load_glo30 would read a missing tile as 0 m.
-    missing = [
-        n
-        for lat, lon in tiles_for_bbox(south, west, north, east)
-        if not (args.dem_dir / f"{(n := tile_name(lat, lon))}.tif").exists()
-    ]
+    b = _box(args, "nothing to render")
+    if b is None:
+        return {"box": None, "skipped": f"no located nodes in {args.region} yet", "written": []}
+    west, south, east, north = bounds = terrain_tiles.snap_bounds_outward(*b)
+    # Refuse rather than publish flat tiles: an unfetched tile would be drawn as 0 m.
+    missing = missing_tiles(args.dem_dir, south, west, north, east)
     if missing:
         raise SystemExit(f"DEM tiles missing in {args.dem_dir} (run fetch-dem): {missing}")
     t0 = time.perf_counter()
@@ -330,7 +395,11 @@ def _run(args: argparse.Namespace) -> TopologyRun:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "fetch-dem":
-        _print(fetch_glo30(args.dem_dir, *args.bbox))
+        b = _box(args, "nothing to fetch")
+        if b is None:
+            _print({"box": None, "skipped": f"no located nodes in {args.region} yet"})
+        else:
+            _print({"box": list(b), **fetch_glo30(args.dem_dir, *b)})
         return 0
     if args.command == "terrain-tiles":
         _print(_terrain_tiles(args))

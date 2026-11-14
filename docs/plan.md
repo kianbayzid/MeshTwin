@@ -112,8 +112,9 @@
 Console phases 1–6 are recorded in `docs/frontend.md`.
 1. **Console Phase 7: predicted coverage raster.** Backend half done and verified (analytics `coverage.json` from the
    placement job, `GET /regions/{region}/coverage`); map layer + margin slider next on `Frontend`.
-2. **Live feed + several regions.** The user's MeshCore radio on USB → `meshcoretomqtt` on the PC → the cluster's
-   broker (own-observer setting). Topology refresh from hourly to minutes; status strip shows live vs synthetic.
+2. **Live feed + several regions.** The user's MeshCore radio on USB (stock companion firmware) →
+   `meshcore-packet-capture` on the Windows PC → the cluster's broker (own-observer setting). meshcoretomqtt needs a
+   custom repeater build and doesn't support Windows (`docs/protocol.md` §5). Topology refresh from hourly to minutes; status strip shows live vs synthetic.
    The pipeline runs one region per Helm value today: make the ingester, CronJobs and DEM fetch run per region.
 3. **City lookup.** Search a city in the console → its region code from a bundled airport list (no outside calls from
    the browser) → whether a feed carries that region → collection starts in the cluster (not from a public API button:
@@ -127,4 +128,9 @@ Console phases 1–6 are recorded in `docs/frontend.md`.
    received satellite packets (SNR by elevation angle). Reuses ingest/Parquet/DDIL, the link budget, residuals and the
    console. Smallest version first: one station, analytics only, written up with numbers.
    - Needs a second ESP32 + SX126x board for TinyGS firmware (one radio can't run MeshCore and TinyGS together).
-   - Data access and terms checked first (research lane, 2026-11-12); station locations are snapped like node locations.
+   - Checked 2026-11-12 (`docs/data-sources.md`): **TinyGS network data has no third-party access** (no public API or
+     feed, no reuse licence; ask terms@tinygs.com in writing), so the comparison is our own station only (n = 1).
+     Board: the **433 MHz** Heltec V3 (LoRa satellites are at 400–470 MHz). Stock firmware keeps only the last packet;
+     history needs a GPL fork with a local MQTT publisher (code not yet reviewed). Orbits from CelesTrak as CSV/JSON
+     (OMM; new catalog numbers have no TLE), under its one-download-per-2-hours rule. Log which satellite auto-tune had
+     the radio on, or "no reception" is ambiguous. Station locations are snapped like node locations.

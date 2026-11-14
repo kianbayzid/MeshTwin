@@ -25,7 +25,9 @@ log = logging.getLogger(__name__)
 
 Array = npt.NDArray[np.float64]
 
-# GLO-30 has no nodata tag and no tiles over open sea (a missing tile is read as 0 m).
+# GLO-30 has no nodata tag and no tiles over open sea: fetch-dem records the 404 as an empty
+# `<tile>.notile` marker, and that tile is read as 0 m. A tile with neither file was never
+# fetched; missing_tiles finds those so the jobs never mistake "not fetched" for sea level.
 # Defensively, anything below the lowest land (-430 m, Dead Sea shore) or NaN is also
 # read as 0 m (sea level) rather than as a deep pit that would block every path.
 NODATA_BELOW_M = -1000.0
@@ -138,6 +140,18 @@ def read_tile(path: Path, lat: int, lon: int) -> Array:
     return z
 
 
+def missing_tiles(
+    dem_dir: Path, min_lat: float, min_lon: float, max_lat: float, max_lon: float
+) -> list[str]:
+    """Tiles of the box fetch-dem never fetched: neither a .tif nor a .notile (open sea)."""
+    return [
+        name
+        for lat, lon in tiles_for_bbox(min_lat, min_lon, max_lat, max_lon)
+        if not (dem_dir / f"{(name := tile_name(lat, lon))}.tif").exists()
+        and not (dem_dir / f"{name}.notile").exists()
+    ]
+
+
 def load_glo30(
     dem_dir: Path, min_lat: float, min_lon: float, max_lat: float, max_lon: float
 ) -> GridTerrain:
@@ -163,7 +177,8 @@ def fetch_glo30(
     Writes to a unique temp file in dem_dir and renames, so an interrupted download
     never looks like a tile, and two jobs sharing the DEM cache (propagation and
     placement CronJobs) never write the same file. A 404 means GLO-30 has no tile
-    there (open sea).
+    there (open sea): an empty `<tile>.notile` marker records it, so later runs don't ask
+    again and missing_tiles can tell open sea from "never fetched".
     """
     dem_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, list[str]] = {"downloaded": [], "present": [], "no_tile": []}
@@ -172,6 +187,9 @@ def fetch_glo30(
         path = dem_dir / f"{name}.tif"
         if path.exists():
             report["present"].append(name)
+            continue
+        if (dem_dir / f"{name}.notile").exists():
+            report["no_tile"].append(name)
             continue
         url = GLO30_URL.format(name=name)
         with tempfile.NamedTemporaryFile(
@@ -194,6 +212,7 @@ def fetch_glo30(
             part.unlink(missing_ok=True)
             if e.code != 404:
                 raise
+            (dem_dir / f"{name}.notile").touch()
             report["no_tile"].append(name)
             continue
         except BaseException:

@@ -26,8 +26,61 @@ Both settings live in `deploy/compose/`. Copy `.env.example` to `.env` first.
 | what you need first | a MeshCore node running observer software | a **subscribe-only, full-access (role 2)** account; role 3 strips SNR/RSSI |
 
 **Setting 1:** point your observer at this machine.
-- meshcoretomqtt: add a broker with `server = <this machine's LAN IP>`, `port = 1883`, `transport = tcp`, and the username/password from `.env`. Keep the topic template `meshcore/{IATA}/{PUBLIC_KEY}/packets` with IATA `SEA`.
+- **A radio on USB, Windows PC** (the recommended route; `docs/protocol.md` §5): stock **companion USB** firmware on the
+  radio and [`meshcore-packet-capture`](https://github.com/agessaman/meshcore-packet-capture) on the PC. Steps below.
+- meshcoretomqtt (Linux/macOS/Pi only, and only with a repeater built with `-D MESH_PACKET_LOGGING=1`): add a broker
+  with `server = <this machine's LAN IP>`, `port = 1883`, `transport = tcp`, `[broker.auth] method = "password"` and
+  the username/password from `.env`. Keep the topic template `meshcore/{IATA}/{PUBLIC_KEY}/packets`. It publishes at
+  QoS 0 whatever you set; the bundled broker queues QoS 0 for the ingester too (`queue_qos0_messages`).
 - The MQTT observer firmware or meshcore-ha take the same four values in their broker settings.
+
+**USB radio on Windows 11, step by step** (sources checked 2026-11-12; the first real run still has to confirm them):
+1. Flash **stock companion USB** firmware for your board with the MeshCore web flasher, and set the US preset
+   (910.525 MHz, 62.5 kHz, SF7, CR5) in the MeshCore app. Then close the app and the flasher: they hold the COM port.
+2. Install Python 3.12 (`winget install Python.Python.3.12`), then in PowerShell:
+   ```powershell
+   git clone https://github.com/agessaman/meshcore-packet-capture; cd meshcore-packet-capture
+   py -3.12 -m venv .venv; .venv\Scripts\pip install -e .
+   ```
+3. Find the radio's COM port: Device Manager → Ports, or
+   `Get-CimInstance Win32_PnPEntity | ? Name -match 'COM\d+' | select Name`.
+4. Create `.env.local` in that folder:
+   ```
+   PACKETCAPTURE_CONNECTION_TYPE=serial
+   PACKETCAPTURE_SERIAL_PORTS=COM5
+   PACKETCAPTURE_IATA=SEA
+   PACKETCAPTURE_ADVERT_INTERVAL_HOURS=0
+   PACKETCAPTURE_DRAIN_MESSAGES=false
+   PACKETCAPTURE_MQTT1_ENABLED=true
+   PACKETCAPTURE_MQTT1_SERVER=127.0.0.1
+   PACKETCAPTURE_MQTT1_PORT=1883
+   PACKETCAPTURE_MQTT1_TRANSPORT=tcp
+   PACKETCAPTURE_MQTT1_USE_TLS=false
+   PACKETCAPTURE_MQTT1_USERNAME=observer
+   PACKETCAPTURE_MQTT1_PASSWORD=<broker password>
+   PACKETCAPTURE_MQTT1_QOS=1
+   PACKETCAPTURE_TOPIC_PACKETS=meshcore/{IATA}/{PUBLIC_KEY}/packets
+   PACKETCAPTURE_TOPIC_STATUS=meshcore/{IATA}/{PUBLIC_KEY}/status
+   ```
+   Why these settings:
+   - `ADVERT_INTERVAL_HOURS=0`: otherwise the bridge makes your radio **transmit** a flood advert with its name (and
+     any location set on it) every 47 h (11 h if you used `install.ps1`).
+   - `DRAIN_MESSAGES=false`: RF capture only; don't pull the companion's stored messages.
+   - `QOS=1`: the broker keeps messages for the ingester while it restarts.
+   - Leave payload decoding off (the default), and decline `install.ps1`'s LetsMesh, owner-key and email prompts.
+5. Run it: `.venv\Scripts\python -m meshcore_packet_capture --verbose`. It stops when the PC sleeps or reboots
+   (no auto-start on Windows).
+   The broker password on the k3d cluster (release `meshtwin`), from Git Bash:
+   `kubectl --context k3d-meshtwin -n meshtwin get secret meshtwin-mqtt -o jsonpath='{.data.password}' | base64 -d`
+6. Check the feed: `meshtwin_ingest_messages_total{result="ok"}` climbs (Grafana, or the console's status strip), or
+   `mosquitto_sub -h 127.0.0.1 -u observer -P <password> -t 'meshcore/SEA/+/packets' -v`.
+
+What to expect on a fresh cluster: until the ingester writes its first Parquet file (up to 2 min after the first
+packet, `flushAge`), topology, propagation and placement fail with `NoReceptionsError: no receptions for region …`
+and retry on their next run; the terrain download and terrain-tiles steps skip ("no located nodes … yet", exit 0). Topology runs every 5
+min, so the map shows nodes 2-8 min after they're first heard. A node appears on the map only once its advert (with a
+location) has been heard; repeaters flood-advert about every 47 h, so the first hours show a partial network. The 3D
+terrain arrives with the daily terrain job (or run it by hand: `kubectl --context k3d-meshtwin -n meshtwin create job --from=cronjob/meshtwin-terrain-tiles terrain-now`).
 
 **Setting 2:** ask the operator. For LetsMesh, the forum
 (`forum.letsmesh.net`, packet-analyzer tag) or the MeshCore Discord thread linked on

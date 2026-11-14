@@ -4,16 +4,19 @@ groups:
   - name: meshtwin
     rules:
       # Freshness: a summary older than 2x the schedule of the job that writes it
-      # (deploy/helm/meshtwin/values.yaml: topology hourly -> topology, resilience;
-      # propagation nightly -> residuals, surprising; placement nightly -> placement).
+      # (deploy/helm/meshtwin/values.yaml: topology every 5 min -> topology, resilience;
+      # propagation hourly -> residuals, surprising; placement hourly -> placement, coverage;
+      # terrain-tiles daily -> terrain).
       # max by: each API replica exports the gauge; the newest view counts.
       # The gauge refreshes when an API replica reloads a summary; the readiness
       # probe (GET /api/v1/regions every 30 s) guarantees that without user traffic.
       - alert: MeshTwinSummaryStale
         expr: |
-          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary=~"topology|resilience"})) > 2 * 3600
+          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary=~"topology|resilience"})) > 2 * 300
           or
-          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary=~"residuals|surprising|placement"})) > 2 * 86400
+          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary=~"residuals|surprising|placement|coverage"})) > 2 * 3600
+          or
+          (time() - max by (region, summary) (meshtwin_api_summary_generated_timestamp_seconds{summary="terrain"})) > 2 * 86400
         for: 10m
         labels: {severity: warning}
         annotations:

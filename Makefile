@@ -17,7 +17,7 @@ CHART   := deploy/helm/meshtwin
 KUBECTL := kubectl --context $(CTX) -n $(NS)
 HELM    := helm --kube-context $(CTX) -n $(NS)
 API_URL := http://127.0.0.1:8090
-JOBS    := topology propagation placement
+JOBS    := topology propagation placement terrain-tiles
 # The dashboard and alert rules live in dashboards/ and are passed in as values.
 CHART_FILES := --set-file grafana.dashboard=dashboards/meshtwin.json \
                --set-file prometheus.rules=dashboards/alerts.yml
@@ -43,8 +43,9 @@ deploy:
 	$(HELM) upgrade --install meshtwin $(CHART) --create-namespace --wait --timeout 10m \
 		$(CHART_FILES) $(VALUES)
 
-# Deploy with TEST DATA, run each CronJob once (in order: propagation and
-# placement share the DEM cache), then check the API lists the region.
+# Deploy with TEST DATA, run each CronJob once (in order: the DEM jobs share
+# the DEM cache), then check the API lists the region and serves its terrain.
+# No bbox override: the DEM box comes from the fixture's located nodes (--root).
 smoke:
 	$(MAKE) deploy VALUES="-f $(CHART)/values-smoke.yaml"
 	set -e; for j in $(JOBS); do \
@@ -56,6 +57,7 @@ smoke:
 	$(KUBECTL) get jobs -o custom-columns=JOB:.metadata.name,START:.status.startTime,DONE:.status.completionTime
 	sleep 31 # the API caches summaries for 30 s
 	curl -fsS $(API_URL)/api/v1/regions | grep -q '"SEA"' && echo "smoke OK: $(API_URL)/api/v1/regions lists SEA"
+	curl -fsS $(API_URL)/api/v1/regions/SEA/terrain.json > /dev/null && echo "terrain OK"
 	curl -fsS $(API_URL)/ | grep -q '/assets/' && echo "console OK: $(API_URL)/"
 
 # Web console checks, as the CI web job: lockfile install, self-checks, strict build.

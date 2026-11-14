@@ -13,7 +13,7 @@ import (
 //
 // The decoder treats Raw as the source of truth. Route, PacketType, Hash and
 // Path duplicate what Raw already contains, and Path in particular differs
-// between tools ("C2 -> E2" string vs ["c2","e2"] array) and is missing on
+// between tools ("C2 -> E2" or "C2,E2" string vs ["c2","e2"] array) and is missing on
 // flood packets, hence json.RawMessage.
 type Message struct {
 	Origin     string          `json:"origin"`    // observer's name

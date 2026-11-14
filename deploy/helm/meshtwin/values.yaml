@@ -3,8 +3,11 @@
 # and kept on upgrade; MQTT credentials come from --set or an existing Secret.
 
 region: SEA # IATA code: MQTT topic filter and the analytics --region
-# DEM box for fetch-dem: minlat,minlon,maxlat,maxlon (must cover the region's nodes).
-bbox: "47.42,-122.40,47.79,-122.03"
+# DEM box override: minlat,minlon,maxlat,maxlon. Empty (default) = fetch-dem and
+# terrain-tiles derive the box from the region's located nodes (--root), so a new
+# region needs no hand step; until a node advertises a location they do nothing.
+# Set it only to pin the box (e.g. nodes outside the area you want rendered).
+bbox: ""
 
 images:
   # Our images: built by `make images` and imported into k3d (no registry).
@@ -43,7 +46,11 @@ ingester:
     public-broker:
       url: wss://mqtt-us-v1.letsmesh.net:443/ # needs a subscribe-only account from the operator
       maxPerSec: 200
-  flushAge: 5m
+  # Max age of buffered rows before a Parquet file is written. Live data reaches the
+  # map after flushAge + the topology period (5 min): 2m keeps that under ~8 min while
+  # writing ~720 small files/day/region (1m would halve the lag's flush part for 2x the
+  # files every topology run lists and reads; 5m would make the 5-min topology pointless).
+  flushAge: 2m
   # DDIL spool: files that fail to upload to S3 wait here (fsync'd) and drain
   # newest first when S3 is back; above maxBytes the oldest are evicted (lost).
   spool:
@@ -89,39 +96,54 @@ api:
 
 analytics:
   # Cron in UTC. Keep in sync with the freshness alerts in dashboards/alerts.yml (2x schedule).
+  # concurrencyPolicy is Forbid (template) and every deadline is under the job's period,
+  # so a slow run is killed before the next one is due instead of piling up.
   jobs:
     topology:
-      schedule: "7 * * * *" # hourly
-      activeDeadlineSeconds: 1800
+      schedule: "*/5 * * * *" # every 5 min: live packets on the map within minutes
+      activeDeadlineSeconds: 240 # under the 5 min period
       dem: false
-      # Measured on the 2 h fixture: peak 156 MiB. A real 24 h window is larger.
+      # Measured on the 2 h fixture: peak 156 MiB, 3 s. A real 24 h window is larger.
       resources:
         requests: {cpu: 250m, memory: 256Mi}
         limits: {cpu: "1", memory: 1Gi}
     propagation:
-      schedule: "17 2 * * *" # nightly
-      activeDeadlineSeconds: 3600
+      schedule: "17 * * * *" # hourly
+      activeDeadlineSeconds: 1500 # done before placement starts at :47
       dem: true
       # Measured: peak 476 MiB (one GLO-30 tile as float64 is ~104 MB).
       resources:
         requests: {cpu: 250m, memory: 512Mi}
         limits: {cpu: "1", memory: 1536Mi}
     placement:
-      schedule: "47 2 * * *" # nightly, after propagation
-      activeDeadlineSeconds: 3600
+      schedule: "47 * * * *" # hourly, 30 min after propagation; also writes coverage
+      activeDeadlineSeconds: 1500 # done before propagation starts at :17
       dem: true
-      # Measured: peak 500 MiB, 1,400 candidate cells.
+      # Measured: peak 500 MiB, 1,400 candidate cells, 17 s.
       resources:
         requests: {cpu: 500m, memory: 512Mi}
         limits: {cpu: "2", memory: 1536Mi}
+    terrain-tiles:
+      schedule: "32 3 * * *" # daily: the box only changes when nodes appear
+      activeDeadlineSeconds: 1800
+      dem: true
+      # Terrain-RGB PNGs for the 3D console. Measured (docs/benchmarks.md, Console Phase 2):
+      # SEA z8-12 = 161 tiles, 8.3 MB, 3 s. Memory not measured: sized like propagation
+      # (same DEM load). A box spanning 4+ GLO-30 tiles needs more.
+      resources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {cpu: "1", memory: 1536Mi}
   backoffLimit: 2
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   demStorage: 1Gi # Copernicus GLO-30 tile cache (~40 MB per 1x1 degree tile)
+  # Sized like topology: fetch-dem --root runs the topology pipeline to find the
+  # located nodes for the box. It uses the CLI's window/advert-lookback defaults,
+  # as the jobs do (none of them override those).
   fetchDemResources:
-    requests: {cpu: 50m, memory: 64Mi}
-    limits: {cpu: 500m, memory: 256Mi}
+    requests: {cpu: 250m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
 
 prometheus:
   retention: 7d

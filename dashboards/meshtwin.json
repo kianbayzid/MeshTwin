@@ -627,7 +627,7 @@
       "type": "table",
       "id": 13,
       "title": "Summary age",
-      "description": "Now minus meta.generated_at. Alert at 2x schedule: 2 h for topology/resilience, 48 h for residuals/surprising/placement.",
+      "description": "Now minus meta.generated_at. Alert at 2x schedule: 10 min for topology/resilience, 2 h for residuals/surprising/placement/coverage, 48 h for terrain.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

@@ -55,7 +55,7 @@ func TestConvertBasic(t *testing.T) {
 }
 
 func TestConvertQuirks(t *testing.T) {
-	// meshcoretomqtt omits the UTC offset: fall back to receive time rather than guess a timezone.
+	// Older meshcoretomqtt omits the UTC offset: fall back to receive time rather than guess a timezone.
 	res, err := Convert(msgRecord(t, topic, map[string]any{"timestamp": "2026-11-01T10:00:00.123456"}))
 	if err != nil || !res.Reception.RxTime.Equal(time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)) {
 		t.Errorf("offset-less timestamp: rx_time = %v, err %v; want receive time", res.Reception.RxTime, err)
@@ -65,8 +65,36 @@ func TestConvertQuirks(t *testing.T) {
 	if res.Reception.SNRDB != nil || res.Reception.RSSIDBm == nil || *res.Reception.RSSIDBm != -93 {
 		t.Errorf("snr/rssi = %v/%v", res.Reception.SNRDB, res.Reception.RSSIDBm)
 	}
-	// Both "path" shapes parse (and are ignored).
-	for _, p := range []any{"C2 -> E2", []string{"c2", "e2"}} {
+	// meshcore-packet-capture: float or "Unknown" SNR, T/U route letters (route comes from raw).
+	for _, c := range []struct {
+		snr, route string
+		missing    bool
+		want       float32
+	}{
+		{"4.75", "T", false, 4.75},
+		{"Unknown", "U", true, 0},
+		{"Unknown", "T", true, 0},
+	} {
+		res, err := Convert(msgRecord(t, topic, map[string]any{"SNR": c.snr, "route": c.route}))
+		if err != nil {
+			t.Errorf("SNR %q route %q: %v", c.snr, c.route, err)
+			continue
+		}
+		got := res.Reception.SNRDB
+		if (got == nil) != c.missing || got != nil && *got != c.want || res.Reception.RouteType != 1 {
+			t.Errorf("SNR %q route %q: snr = %v, route_type = %d; want missing=%v %v, route 1 from raw",
+				c.snr, c.route, got, res.Reception.RouteType, c.missing, c.want)
+		}
+	}
+	// Non-finite spellings ParseFloat accepts are broker junk: missing, never stored.
+	for _, v := range []string{"NaN", "nan", "Inf", "+Inf", "-inf", "infinity", "-Infinity", "1e40"} {
+		res, err := Convert(msgRecord(t, topic, map[string]any{"SNR": v, "RSSI": v}))
+		if err != nil || res.Reception.SNRDB != nil || res.Reception.RSSIDBm != nil {
+			t.Errorf("SNR/RSSI %q: snr = %v, rssi = %v, err %v; want both missing", v, res.Reception.SNRDB, res.Reception.RSSIDBm, err)
+		}
+	}
+	// All "path" shapes parse (and are ignored).
+	for _, p := range []any{"C2 -> E2", "C2,E2", []string{"c2", "e2"}} {
 		if _, err := Convert(msgRecord(t, topic, map[string]any{"path": p})); err != nil {
 			t.Errorf("path %v: %v", p, err)
 		}

@@ -67,16 +67,24 @@ def test_404_is_no_tile_and_500_raises(tmp_path: Path, monkeypatch: pytest.Monke
         raise _http_error(404)
 
     monkeypatch.setattr(urllib.request, "urlopen", not_found)
-    report = terrain.fetch_glo30(tmp_path, 47.5, -122.5, 47.5, -122.5)
+    sea = tmp_path / "sea"
+    report = terrain.fetch_glo30(sea, 47.5, -122.5, 47.5, -122.5)
     assert report["no_tile"] == [TILE]
+    # The 404 is remembered: open sea, not "never fetched", and not asked for again.
+    assert [f.name for f in sea.iterdir()] == [f"{TILE}.notile"]
+    assert terrain.missing_tiles(sea, 47.5, -122.5, 47.5, -122.5) == []
 
     def server_error(url: str, timeout: float) -> io.BytesIO:
         raise _http_error(500)
 
     monkeypatch.setattr(urllib.request, "urlopen", server_error)
+    assert terrain.fetch_glo30(sea, 47.5, -122.5, 47.5, -122.5)["no_tile"] == [TILE]
+
+    failed = tmp_path / "failed"
     with pytest.raises(urllib.error.HTTPError):
-        terrain.fetch_glo30(tmp_path, 47.5, -122.5, 47.5, -122.5)
-    assert list(tmp_path.iterdir()) == []
+        terrain.fetch_glo30(failed, 47.5, -122.5, 47.5, -122.5)
+    assert list(failed.iterdir()) == []
+    assert terrain.missing_tiles(failed, 47.5, -122.5, 47.5, -122.5) == [TILE]
 
 
 def test_present_tile_is_not_fetched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
