@@ -50,7 +50,7 @@ smoke:
 	$(MAKE) deploy VALUES="-f $(CHART)/values-smoke.yaml"
 	set -e; for j in $(JOBS); do \
 		$(KUBECTL) delete job smoke-$$j --ignore-not-found; \
-		$(KUBECTL) create job smoke-$$j --from=cronjob/meshtwin-$$j; \
+		$(KUBECTL) create job smoke-$$j --from=cronjob/meshtwin-sea-$$j; \
 		$(KUBECTL) wait --for=condition=complete --timeout=20m job/smoke-$$j \
 			|| { $(KUBECTL) logs job/smoke-$$j --all-containers --tail=50; exit 1; }; \
 	done

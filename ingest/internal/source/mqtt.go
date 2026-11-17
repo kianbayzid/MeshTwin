@@ -8,8 +8,10 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,11 +27,11 @@ const MaxMessageBytes = 16 * 1024
 
 // MQTTConfig describes one broker subscription.
 type MQTTConfig struct {
-	URL       string  // tcp://host:1883, ssl://host:8883, wss://host:443/
-	Username  string  // optional
-	Password  string  // optional; from a Secret, never a flag
-	Topic     string  // e.g. meshcore/SEA/+/packets; never "#"
-	MaxPerSec float64 // per-source message cap; 0 = unlimited
+	URL       string   // tcp://host:1883, ssl://host:8883, wss://host:443/
+	Username  string   // optional
+	Password  string   // optional; from a Secret, never a flag
+	Topics    []string // e.g. meshcore/SEA/+/packets, one per region; never "#" (see ParseTopics)
+	MaxPerSec float64  // per-source message cap; 0 = unlimited
 
 	// Persistence (DDIL). Default QoS 0 + clean session: nothing is queued
 	// while we are down, and public community brokers carry no session state
@@ -98,11 +100,15 @@ func RunMQTT(ctx context.Context, cfg MQTTConfig, emit func(replay.Record) error
 		SetOnConnectHandler(func(c mqtt.Client) {
 			// Subscribe on every (re)connect: a clean session forgets subscriptions
 			// (and re-subscribing to a persistent session is harmless).
-			if t := c.Subscribe(cfg.Topic, cfg.QoS, onMessage); t.Wait() && t.Error() != nil {
-				slog.Error("subscribe failed", "topic", cfg.Topic, "err", t.Error())
+			filters := make(map[string]byte, len(cfg.Topics))
+			for _, f := range cfg.Topics {
+				filters[f] = cfg.QoS
+			}
+			if t := c.SubscribeMultiple(filters, onMessage); t.Wait() && t.Error() != nil {
+				slog.Error("subscribe failed", "topics", cfg.Topics, "err", t.Error())
 				return
 			}
-			slog.Info("mqtt connected", "broker", cfg.URL, "topic", cfg.Topic)
+			slog.Info("mqtt connected", "broker", cfg.URL, "topics", cfg.Topics)
 			h.Connected(true)
 		}).
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
@@ -198,7 +204,7 @@ func (r *receiver) start(ctx context.Context, size int) (enqueue func(message), 
 // shutdown (so a QoS 1 session redelivers it).
 func (r *receiver) receive(ctx context.Context, topic string, payload []byte) bool {
 	switch {
-	case !topicMatches(r.cfg.Topic, topic):
+	case !slices.ContainsFunc(r.cfg.Topics, func(f string) bool { return topicMatches(f, topic) }):
 		r.h.Dropped("topic_mismatch")
 		return true
 	case len(payload) > MaxMessageBytes:
@@ -221,6 +227,26 @@ func (r *receiver) receive(ctx context.Context, topic string, payload []byte) bo
 		return false
 	}
 	return true
+}
+
+// ParseTopics splits a comma-separated list of topic filters (MQTT_TOPIC),
+// one per region. It rejects empty entries, duplicates and the bare "#"
+// firehose: we subscribe only to regions we were asked for.
+func ParseTopics(s string) ([]string, error) {
+	var out []string
+	for _, f := range strings.Split(s, ",") {
+		f = strings.TrimSpace(f)
+		switch {
+		case f == "":
+			return nil, fmt.Errorf("topic list %q: empty filter", s)
+		case f == "#":
+			return nil, fmt.Errorf("topic list %q: \"#\" subscribes to the whole broker; name a region", s)
+		case slices.Contains(out, f):
+			return nil, fmt.Errorf("topic list %q: duplicate filter %q", s, f)
+		}
+		out = append(out, f)
+	}
+	return out, nil
 }
 
 // topicMatches applies MQTT filter rules: "+" matches one level, a trailing

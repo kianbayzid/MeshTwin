@@ -34,6 +34,7 @@ import (
 type config struct {
 	Mode       string
 	MQTT       source.MQTTConfig
+	MQTTTopic  string // comma-separated filters, parsed into MQTT.Topics
 	ReplayFile string
 	Speed      float64
 	SynthDur   time.Duration
@@ -89,7 +90,7 @@ func parseConfig() config {
 	flag.StringVar(&c.Mode, "mode", env("MODE", "live"), "live | replay | synthetic")
 	flag.StringVar(&c.MQTT.URL, "mqtt-url", env("MQTT_URL", "tcp://localhost:1883"), "broker URL: tcp://, ssl://, ws://, wss://")
 	flag.StringVar(&c.MQTT.Username, "mqtt-username", env("MQTT_USERNAME", ""), "broker username (password: env MQTT_PASSWORD)")
-	flag.StringVar(&c.MQTT.Topic, "mqtt-topic", env("MQTT_TOPIC", "meshcore/SEA/+/packets"), "region-filtered topic; never #")
+	flag.StringVar(&c.MQTTTopic, "mqtt-topic", env("MQTT_TOPIC", "meshcore/SEA/+/packets"), "comma-separated region-filtered topics; never #")
 	flag.Float64Var(&c.MQTT.MaxPerSec, "mqtt-max-per-sec", envNum("MQTT_MAX_PER_SEC", 50.0), "drop messages above this rate (0 = no cap)")
 	flag.IntVar(&c.MQTTQoS, "mqtt-qos", envNum("MQTT_QOS", 0), "0 or 1; keep 0 on public community brokers (politeness), 1 with a persistent session on your own broker")
 	flag.StringVar(&c.MQTT.ClientID, "mqtt-client-id", env("MQTT_CLIENT_ID", ""), "stable client id, needed for a persistent session (default meshtwin-<random>)")
@@ -315,6 +316,11 @@ type sourceFunc func(ctx context.Context, emit func(replay.Record) error, connec
 func pickSource(c config) (sourceFunc, error) {
 	switch c.Mode {
 	case "live":
+		topics, err := source.ParseTopics(c.MQTTTopic)
+		if err != nil {
+			return nil, fmt.Errorf("-mqtt-topic: %w", err)
+		}
+		c.MQTT.Topics = topics
 		return func(ctx context.Context, emit func(replay.Record) error, up *atomic.Bool) error {
 			return source.RunMQTT(ctx, c.MQTT, emit, source.Hooks{
 				Connected: func(b bool) { up.Store(b); mqttConnected.Set(map[bool]float64{true: 1}[b]) },

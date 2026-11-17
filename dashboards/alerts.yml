@@ -21,7 +21,7 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "{{ $labels.region }} {{ $labels.summary }}.json is {{ $value | humanizeDuration }} old"
-          description: "Older than twice its CronJob schedule: check the analytics CronJob's last run (kubectl get jobs)."
+          description: "Older than twice its CronJob schedule: check that region's analytics CronJob (<release>-<region>-<job>, kubectl get jobs -l meshtwin/region=<REGION>)."
 
       # Any rejected summary is a contract or privacy problem, not noise.
       - alert: MeshTwinSummaryValidationFailures

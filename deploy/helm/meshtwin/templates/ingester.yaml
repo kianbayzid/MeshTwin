@@ -18,7 +18,7 @@ log_dest stdout
 {{- $bundled := and (eq .Values.ingester.source "own-observer") .Values.mosquitto.enabled (not $src.url) }}
 {{- $url := ternary (printf "tcp://%s-mosquitto:1883" .Release.Name) $src.url $bundled }}
 {{- if not $url }}{{ fail "ingester: set ingester.sources.<source>.url or enable the bundled mosquitto" }}{{ end }}
-# Live ingester: one MQTT connection (subscribe only) -> Parquet in S3.
+# Live ingester: one MQTT connection (subscribe only, all regions) -> Parquet in S3.
 # One replica: two would double every row (each subscribes to the same topic).
 apiVersion: apps/v1
 kind: Deployment
@@ -44,7 +44,8 @@ spec:
           env:
             - {name: MODE, value: live}
             - {name: MQTT_URL, value: {{ $url | quote }}}
-            - {name: MQTT_TOPIC, value: "meshcore/{{ .Values.region }}/+/packets"}
+            {{- $topics := list }}{{ range .Values.regions }}{{ $topics = append $topics (printf "meshcore/%s/+/packets" .) }}{{ end }}
+            - {name: MQTT_TOPIC, value: {{ join "," $topics | quote }}} # one subscription per region
             - {name: MQTT_MAX_PER_SEC, value: {{ $src.maxPerSec | quote }}}
             - {name: FLUSH_AGE, value: {{ .Values.ingester.flushAge | quote }}}
             - {name: SPOOL_DIR, value: /spool}

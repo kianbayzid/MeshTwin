@@ -1,6 +1,11 @@
-{{- /* One image, four CronJobs that differ only in the subcommand, schedule and size. */ -}}
-{{- /* DEM box: from the region's located nodes (--root), or the bbox override. */ -}}
-{{- $box := ternary (list (printf "--bbox=%s" .Values.bbox)) (list (printf "--root=s3://%s" .Values.s3.bucket) (printf "--region=%s" .Values.region)) (ne .Values.bbox "") }}
+{{- /* One image, four CronJobs per region that differ only in the subcommand, schedule and size. */ -}}
+{{- /* Regions are validated here (always rendered); ingester.yaml relies on it. */ -}}
+{{- if not .Values.regions }}{{ fail "regions: list at least one IATA code, e.g. [SEA]" }}{{ end }}
+{{- range .Values.regions }}
+{{- if not (and (kindIs "string" .) (regexMatch "^[A-Z0-9]{2,8}$" (toString .))) }}{{ fail (printf "regions: %q is not a string of 2-8 uppercase letters/digits" (toString .)) }}{{ end }}
+{{- end }}
+{{- if ne (len .Values.regions) (len (uniq .Values.regions)) }}{{ fail (printf "regions: duplicate code in %v (each region needs its own CronJobs and topic)" .Values.regions) }}{{ end }}
+{{- if not (kindIs "map" .Values.bbox) }}{{ fail "bbox: now a map keyed by region, e.g. {SEA: \"47.0,-123.0,48.0,-121.5\"}" }}{{ end }}
 # Copernicus GLO-30 tile cache, shared by the jobs that use terrain. fetch-dem
 # skips tiles already present, so only the first run downloads (~40 MB/tile).
 apiVersion: v1
@@ -19,14 +24,19 @@ spec:
   resources:
     requests:
       storage: {{ .Values.analytics.demStorage }}
-{{- range $name, $job := .Values.analytics.jobs }}
+{{- range $region := .Values.regions }}
+{{- /* DEM box: from the region's located nodes (--root), or its bbox override. */ -}}
+{{- $bbox := index $.Values.bbox $region | default "" }}
+{{- $box := ternary (list (printf "--bbox=%s" $bbox)) (list (printf "--root=s3://%s" $.Values.s3.bucket) (printf "--region=%s" $region)) (ne $bbox "") }}
+{{- range $name, $job := $.Values.analytics.jobs }}
 {{- $c := dict "root" $ "component" (printf "analytics-%s" $name) }}
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ $.Release.Name }}-{{ $name }}
+  name: {{ $.Release.Name }}-{{ lower $region }}-{{ $name }}
   labels: {{- include "meshtwin.labels" $c | nindent 4 }}
+    meshtwin/region: {{ $region }}
 spec:
   schedule: {{ $job.schedule | quote }}
   timeZone: Etc/UTC
@@ -37,12 +47,14 @@ spec:
   jobTemplate:
     metadata:
       labels: {{- include "meshtwin.labels" $c | nindent 8 }}
+        meshtwin/region: {{ $region }}
     spec:
       backoffLimit: {{ $.Values.analytics.backoffLimit }}
       activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
       template:
         metadata:
           labels: {{- include "meshtwin.labels" $c | nindent 12 }}
+            meshtwin/region: {{ $region }}
         spec:
           restartPolicy: Never
           automountServiceAccountToken: false
@@ -72,13 +84,13 @@ spec:
               imagePullPolicy: {{ $.Values.pullPolicy }}
               args:
                 - {{ $name }}
-                {{- if and (eq $name "terrain-tiles") $.Values.bbox }}
-                - {{ printf "--bbox=%s" $.Values.bbox | quote }} # override; --bbox and --root are exclusive
+                {{- if and (eq $name "terrain-tiles") $bbox }}
+                - {{ printf "--bbox=%s" $bbox | quote }} # override; --bbox and --root are exclusive
                 {{- else }}
                 - --root=s3://{{ $.Values.s3.bucket }}
                 {{- end }}
                 - --out=s3://{{ $.Values.s3.bucket }}
-                - --region={{ $.Values.region }}
+                - --region={{ $region }}
                 {{- if $job.dem }}
                 - --dem-dir=/dem
                 {{- end }}
@@ -97,4 +109,5 @@ spec:
             - name: dem
               persistentVolumeClaim: {claimName: {{ $.Release.Name }}-dem}
             {{- end }}
+{{- end }}
 {{- end }}

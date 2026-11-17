@@ -110,12 +110,15 @@
 
 ## Next (decided 2026-11-12, stop after each)
 Console phases 1–6 are recorded in `docs/frontend.md`.
-1. **Console Phase 7: predicted coverage raster.** Backend half done and verified (analytics `coverage.json` from the
-   placement job, `GET /regions/{region}/coverage`); map layer + margin slider next on `Frontend`.
+1. **Console Phase 7: predicted coverage raster.** Done (2026-11-13): analytics `coverage.json` from the placement
+   job, `GET /regions/{region}/coverage`, map layer + margin slider (`docs/frontend.md`).
 2. **Live feed + several regions.** The user's MeshCore radio on USB (stock companion firmware) →
    `meshcore-packet-capture` on the Windows PC → the cluster's broker (own-observer setting). meshcoretomqtt needs a
    custom repeater build and doesn't support Windows (`docs/protocol.md` §5). Topology refresh from hourly to minutes; status strip shows live vs synthetic.
-   The pipeline runs one region per Helm value today: make the ingester, CronJobs and DEM fetch run per region.
+   - Several regions: done (2026-11-16, verifier PASS; golangci-lint and `make smoke` not run, Docker down). Helm
+     `regions: [SEA, …]` + `bbox:` map per region → one ingester subscribed to every region's topic (`MQTT_TOPIC` is
+     a comma list) and four CronJobs per region, `<release>-<region>-<job>`, labelled `meshtwin/region`. Same
+     schedules for all regions, so N regions = N× the job load at each slot. Upgrading renames the CronJobs.
 3. **City lookup.** Search a city in the console → its region code from a bundled airport list (no outside calls from
    the browser) → whether a feed carries that region → collection starts in the cluster (not from a public API button:
    the API stays read-only) → terrain fetched for the area → map once enough has been heard (hours, not instantly:

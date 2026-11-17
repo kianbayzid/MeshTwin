@@ -2,12 +2,17 @@
 # S3 keys and the Grafana password are generated into Secrets on first install
 # and kept on upgrade; MQTT credentials come from --set or an existing Secret.
 
-region: SEA # IATA code: MQTT topic filter and the analytics --region
-# DEM box override: minlat,minlon,maxlat,maxlon. Empty (default) = fetch-dem and
-# terrain-tiles derive the box from the region's located nodes (--root), so a new
-# region needs no hand step; until a node advertises a location they do nothing.
-# Set it only to pin the box (e.g. nodes outside the area you want rendered).
-bbox: ""
+# IATA codes (2-8 uppercase letters/digits). The one ingester subscribes to
+# meshcore/<R>/+/packets for each; every region gets its own set of analytics
+# CronJobs (<release>-<region>-<job>) on the same schedules, so N regions = N times
+# the concurrent job load (Forbid only stops a CronJob overlapping itself).
+regions: [SEA]
+# DEM box override per region: {SEA: "minlat,minlon,maxlat,maxlon"}. Missing or
+# empty (default) = fetch-dem and terrain-tiles derive the box from the region's
+# located nodes (--root), so a new region needs no hand step; until a node
+# advertises a location they do nothing. Set it only to pin the box (e.g. nodes
+# outside the area you want rendered).
+bbox: {}
 
 images:
   # Our images: built by `make images` and imported into k3d (no registry).
@@ -96,6 +101,7 @@ api:
 
 analytics:
   # Cron in UTC. Keep in sync with the freshness alerts in dashboards/alerts.yml (2x schedule).
+  # One CronJob per region x job, all regions on these schedules (see regions above).
   # concurrencyPolicy is Forbid (template) and every deadline is under the job's period,
   # so a slow run is killed before the next one is due instead of piling up.
   jobs:

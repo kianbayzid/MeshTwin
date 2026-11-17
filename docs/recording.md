@@ -80,7 +80,7 @@ packet, `flushAge`), topology, propagation and placement fail with `NoReceptions
 and retry on their next run; the terrain download and terrain-tiles steps skip ("no located nodes … yet", exit 0). Topology runs every 5
 min, so the map shows nodes 2-8 min after they're first heard. A node appears on the map only once its advert (with a
 location) has been heard; repeaters flood-advert about every 47 h, so the first hours show a partial network. The 3D
-terrain arrives with the daily terrain job (or run it by hand: `kubectl --context k3d-meshtwin -n meshtwin create job --from=cronjob/meshtwin-terrain-tiles terrain-now`).
+terrain arrives with the daily terrain job (or run it by hand: `kubectl --context k3d-meshtwin -n meshtwin create job --from=cronjob/meshtwin-sea-terrain-tiles terrain-now`).
 
 **Setting 2:** ask the operator. For LetsMesh, the forum
 (`forum.letsmesh.net`, packet-analyzer tag) or the MeshCore Discord thread linked on

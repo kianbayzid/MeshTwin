@@ -63,7 +63,7 @@ func TestReceiverRateLimitByQoS(t *testing.T) {
 	}
 	for _, tc := range tests {
 		c := &counter{dropped: map[string]int{}}
-		rc := newReceiver(MQTTConfig{Topic: "meshcore/SEA/+/packets", MaxPerSec: 20, QoS: tc.qos}, c.emit, Hooks{Dropped: c.drop})
+		rc := newReceiver(MQTTConfig{Topics: []string{"meshcore/SEA/+/packets"}, MaxPerSec: 20, QoS: tc.qos}, c.emit, Hooks{Dropped: c.drop})
 		start := time.Now()
 		for range 25 {
 			if !rc.receive(context.Background(), "meshcore/SEA/obs/packets", []byte("{}")) {
@@ -84,7 +84,7 @@ func TestReceiverRateLimitByQoS(t *testing.T) {
 // not ack, so the broker redelivers the message to the persistent session.
 func TestReceiverShutdownUnblocksWithoutAck(t *testing.T) {
 	c := &counter{dropped: map[string]int{}}
-	rc := newReceiver(MQTTConfig{Topic: "t/+", MaxPerSec: 1, QoS: 1}, c.emit, Hooks{Dropped: c.drop})
+	rc := newReceiver(MQTTConfig{Topics: []string{"t/+"}, MaxPerSec: 1, QoS: 1}, c.emit, Hooks{Dropped: c.drop})
 	ctx, cancel := context.WithCancel(context.Background())
 	for range 2 { // use up the burst of 2
 		rc.receive(ctx, "t/a", []byte("{}"))
@@ -99,15 +99,60 @@ func TestReceiverShutdownUnblocksWithoutAck(t *testing.T) {
 	}
 }
 
-// Messages from a persistent session's default handler are filtered too.
-func TestReceiverDropsOtherTopics(t *testing.T) {
-	c := &counter{dropped: map[string]int{}}
-	rc := newReceiver(MQTTConfig{Topic: "meshcore/SEA/+/packets"}, c.emit, Hooks{Dropped: c.drop})
-	if !rc.receive(context.Background(), "meshcore/PDX/obs/packets", []byte("{}")) {
-		t.Error("dropped message not acked")
+// Messages from a persistent session's default handler are filtered too;
+// with several regions, a topic matching any filter is accepted.
+func TestReceiverTopicFilters(t *testing.T) {
+	multi := []string{"meshcore/SEA/+/packets", "meshcore/PDX/+/packets"}
+	tests := []struct {
+		filters []string
+		topic   string
+		want    bool
+	}{
+		{[]string{"meshcore/SEA/+/packets"}, "meshcore/SEA/obs/packets", true},
+		{[]string{"meshcore/SEA/+/packets"}, "meshcore/PDX/obs/packets", false},
+		{multi, "meshcore/SEA/obs/packets", true},
+		{multi, "meshcore/PDX/obs/packets", true},
+		{multi, "meshcore/LAX/obs/packets", false},
+		{multi, "meshcore/PDX/obs/status", false},
+		{nil, "meshcore/SEA/obs/packets", false},
 	}
-	if c.emitted != 0 || c.dropped["topic_mismatch"] != 1 {
-		t.Errorf("emitted %d, topic_mismatch %d; want 0, 1", c.emitted, c.dropped["topic_mismatch"])
+	for _, tc := range tests {
+		c := &counter{dropped: map[string]int{}}
+		rc := newReceiver(MQTTConfig{Topics: tc.filters}, c.emit, Hooks{Dropped: c.drop})
+		if !rc.receive(context.Background(), tc.topic, []byte("{}")) {
+			t.Errorf("%v %q: not acked", tc.filters, tc.topic)
+		}
+		wantEmit, wantDrop := 1, 0
+		if !tc.want {
+			wantEmit, wantDrop = 0, 1
+		}
+		if c.emitted != wantEmit || c.dropped["topic_mismatch"] != wantDrop {
+			t.Errorf("%v %q: emitted %d, topic_mismatch %d; want %d, %d", tc.filters, tc.topic, c.emitted, c.dropped["topic_mismatch"], wantEmit, wantDrop)
+		}
+	}
+}
+
+func TestParseTopics(t *testing.T) {
+	tests := []struct {
+		in   string
+		want []string // nil = error
+	}{
+		{"meshcore/SEA/+/packets", []string{"meshcore/SEA/+/packets"}},
+		{"meshcore/SEA/+/packets,meshcore/PDX/+/packets", []string{"meshcore/SEA/+/packets", "meshcore/PDX/+/packets"}},
+		{" meshcore/SEA/+/packets , meshcore/PDX/+/packets ", []string{"meshcore/SEA/+/packets", "meshcore/PDX/+/packets"}},
+		{"", nil},
+		{"meshcore/SEA/+/packets,", nil},
+		{"meshcore/SEA/+/packets, ,meshcore/PDX/+/packets", nil},
+		{"#", nil},
+		{"meshcore/SEA/+/packets, #", nil},
+		{"meshcore/SEA/+/packets,meshcore/SEA/+/packets", nil},
+		{"meshcore/SEA/+/packets, meshcore/SEA/+/packets ", nil},
+	}
+	for _, tc := range tests {
+		got, err := ParseTopics(tc.in)
+		if (err == nil) != (tc.want != nil) || !slices.Equal(got, tc.want) {
+			t.Errorf("ParseTopics(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
 	}
 }
 
@@ -138,7 +183,7 @@ func TestReceiverAcksInArrivalOrder(t *testing.T) {
 			time.Sleep(time.Duration(len(r.Topic)%3) * time.Millisecond) // varied work
 			return nil
 		}
-		rc := newReceiver(MQTTConfig{Topic: "t/+", MaxPerSec: 500, QoS: qos}, emit, Hooks{Dropped: func(string) {}})
+		rc := newReceiver(MQTTConfig{Topics: []string{"t/+"}, MaxPerSec: 500, QoS: qos}, emit, Hooks{Dropped: func(string) {}})
 		ctx, cancel := context.WithCancel(context.Background())
 		enqueue, done := rc.start(ctx, 8) // smaller than the burst: enqueue blocks sometimes
 		const n = 600                     // more than the 501 burst: QoS 1 waits on the limiter
@@ -173,7 +218,7 @@ func TestReceiverShutdownStopsWorkerWithoutAcks(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	rc := newReceiver(MQTTConfig{Topic: "t/+", QoS: 1}, emit, Hooks{Dropped: func(string) {}})
+	rc := newReceiver(MQTTConfig{Topics: []string{"t/+"}, QoS: 1}, emit, Hooks{Dropped: func(string) {}})
 	enqueue, done := rc.start(ctx, 4)
 	for i := range 4 {
 		enqueue(fakeMsg{id: i, topic: "t/a", log: log})
@@ -207,7 +252,7 @@ func TestReceiverNoSendAfterClose(t *testing.T) {
 				return ctx.Err()
 			}
 		}
-		rc := newReceiver(MQTTConfig{Topic: "t/+", QoS: 1}, emit, Hooks{Dropped: func(string) {}})
+		rc := newReceiver(MQTTConfig{Topics: []string{"t/+"}, QoS: 1}, emit, Hooks{Dropped: func(string) {}})
 		enqueue, done := rc.start(ctx, queueSize)
 		var wg sync.WaitGroup
 		for i := range 50 {
