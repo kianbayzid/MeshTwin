@@ -62,7 +62,8 @@ Filtering only removes links: node `degree` and `stats` stay as the job computed
 ```json
 {
   "meta": {"schema_version": 1, "region": "SEA", "generated_at": "2026-11-09T14:00:00Z",
-           "window": {"from": "2026-11-08T14:00:00Z", "to": "2026-11-09T14:00:00Z"}, "source": "topology-job"},
+           "window": {"from": "2026-11-08T14:00:00Z", "to": "2026-11-09T14:00:00Z"}, "source": "topology-job",
+           "data_sources": {"live": 412833, "replay": 0, "synthetic": 0, "unknown": 0}},
   "stats": {"receptions": 412833, "flood_receptions": 301277, "observers": 8,
             "nodes": 87, "links": 241, "ambiguous_hop_share": 0.38, "unresolved_hops": 112},
   "nodes": [
@@ -83,6 +84,10 @@ Filtering only removes links: node `degree` and `stats` stay as the job computed
   ]
 }
 ```
+- `meta.data_sources` (topology only; optional, so older summaries without it stay valid): where the window's
+  reception rows came from, from the Parquet `data_source` column (schema v2). All four keys, integers ≥ 0:
+  `{"live": 412833, "replay": 0, "synthetic": 0, "unknown": 0}`. `unknown` counts schema v1 rows, written before
+  the column existed. The console labels the region Live / Replay / Synthetic / Mixed from these counts.
 - `role`: `repeater` | `companion` | `room` | `sensor` | `unknown`. `unknown` means never advertised: either seen only
   as a hop hash (id = that 2–6 hex hash) or an observer known from its MQTT topic (normal 8-hex id). An advert-less
   observer counts as a relay only with self-echo evidence (see `analytics/README.md`).
