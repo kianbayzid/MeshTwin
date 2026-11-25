@@ -17,6 +17,8 @@ from .storage import table_glob
 # Direct routes list hops still to go, so they are not evidence of links (protocol.md 2).
 FLOOD_ROUTES = (0, 1)
 TRACE_PAYLOAD = 9  # path bytes are SNR samples, not hashes
+# schema v2 data_source values; schema v1 files have no column and count as "unknown".
+DATA_SOURCES = ("live", "replay", "synthetic", "unknown")
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class Counts:
     receptions: int
     flood_receptions: int
     observers: int
+    data_sources: dict[str, int]  # reception rows per DATA_SOURCES key, all keys present
 
 
 def to_us(t: datetime) -> int:
@@ -43,7 +46,10 @@ def to_us(t: datetime) -> int:
 
 
 def _src(root: str, table: str) -> str:
-    return f"read_parquet('{table_glob(root, table)}', hive_partitioning = true)"
+    # union_by_name: one window can mix schema v1 and v2 files (v2 added data_source).
+    return (
+        f"read_parquet('{table_glob(root, table)}', hive_partitioning = true, union_by_name = true)"
+    )
 
 
 def max_rx_us(con: duckdb.DuckDBPyConnection, root: str, region: str) -> int | None:
@@ -93,7 +99,20 @@ def counts(con: duckdb.DuckDBPyConnection, root: str, region: str, frm: int, to:
         [region, frm, to],
     ).fetchone()
     assert row is not None
-    return Counts(int(row[0]), int(row[1]), int(row[2]))
+    # UNION BY NAME with an empty typed row adds data_source as NULL when every file is v1.
+    by_source = con.execute(
+        f"""SELECT coalesce(data_source, 'unknown'), count(*)
+            FROM (SELECT * FROM {_receptions(root)}
+                  UNION ALL BY NAME SELECT NULL::VARCHAR AS data_source WHERE false)
+            GROUP BY 1""",
+        [region, frm, to],
+    ).fetchall()
+    sources = dict.fromkeys(DATA_SOURCES, 0)
+    for source, n in by_source:
+        # Values outside the enum would break the contract's fixed keys; count them as unknown.
+        key = source if source in sources else "unknown"
+        sources[key] += int(n)
+    return Counts(int(row[0]), int(row[1]), int(row[2]), sources)
 
 
 def flood_receptions(

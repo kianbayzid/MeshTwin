@@ -163,7 +163,7 @@ func run(c config) error {
 		slog.Info("spool enabled: files object storage does not accept are buffered on disk", "dir", c.SpoolDir, "max_bytes", c.SpoolMaxBytes, "drain_rate_bytes", c.DrainRateBytes)
 		go spool.Drain(ctx)
 	}
-	w := &ingest.Writer{Store: store, FlushRows: c.FlushRows, FlushAge: c.FlushAge, Now: time.Now}
+	w := &ingest.Writer{Store: store, FlushRows: c.FlushRows, FlushAge: c.FlushAge, Now: time.Now, DataSource: c.Mode}
 
 	// Nothing above touches the network, so probes answer from the first second.
 	var mqttUp, flushOK atomic.Bool

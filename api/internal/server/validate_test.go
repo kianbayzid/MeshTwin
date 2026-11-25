@@ -85,6 +85,12 @@ func TestValidate(t *testing.T) {
 		{"non-hex id", "SEA", edit(`"id": "C2"`, `"id": "ZZ"`), "not a 2-8 hex node id"},
 		{"bad link endpoint", "SEA", edit(`"b": "C2"`, `"b": "not-hex"`), "not a 2-8 hex node id"},
 
+		// Provenance counts (meta.data_sources, topology only).
+		{"data_sources", "SEA", edit(`"source": "topology-job"`, `"source": "topology-job", "data_sources": {"live": 5, "replay": 0, "synthetic": 5, "unknown": 0}`), ""},
+		{"data_sources extra key", "SEA", edit(`"source": "topology-job"`, `"source": "topology-job", "data_sources": {"live": 5, "replay": 0, "synthetic": 5, "unknown": 0, "mqtt": 10}`), "meta.data_sources.mqtt: field not in the allow-list"},
+		{"data_sources fractional", "SEA", edit(`"source": "topology-job"`, `"source": "topology-job", "data_sources": {"live": 0.5}`), "live = 0.5 is not an integer"},
+		{"data_sources as string", "SEA", edit(`"source": "topology-job"`, `"source": "topology-job", "data_sources": {"live": "5"}`), "is a string, want number"},
+
 		// Envelope and syntax.
 		{"region mismatch", "PDX", fixtures["topology"], "meta.region"},
 		{"schema version 2", "SEA", edit(`"schema_version": 1`, `"schema_version": 2`), "schema_version"},
@@ -129,6 +135,11 @@ func TestValidateEveryFixture(t *testing.T) {
 	}
 	if _, err := validate("SEA", "secrets", []byte(fixtures["topology"])); err == nil {
 		t.Error("a summary name without an allow-list must be rejected")
+	}
+	// meta.data_sources is topology-only.
+	res := strings.Replace(fixtures["resilience"], `"source": "topology-job"`, `"source": "topology-job", "data_sources": {"live": 1}`, 1)
+	if _, err := validate("SEA", "resilience", []byte(res)); err == nil || !strings.Contains(err.Error(), "meta.data_sources") {
+		t.Errorf("resilience with meta.data_sources: err = %v, want rejected", err)
 	}
 }
 

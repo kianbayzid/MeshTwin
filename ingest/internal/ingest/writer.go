@@ -46,6 +46,9 @@ type Writer struct {
 	FlushRows int           // e.g. 100k rows: big enough for good compression, small enough for memory
 	FlushAge  time.Duration // e.g. 5 min: bounds how stale the data in storage can be
 	Now       func() time.Time
+	// DataSource is stamped on every row: the ingester's -mode (live, replay or
+	// synthetic). Replay writes "replay": a capture does not record its origin.
+	DataSource string
 
 	receptions map[partKey]*buffer[Reception]
 	adverts    map[partKey]*buffer[Advert]
@@ -57,11 +60,14 @@ func (w *Writer) Add(res Result) bool {
 	if w.receptions == nil {
 		w.receptions, w.adverts = map[partKey]*buffer[Reception]{}, map[partKey]*buffer[Advert]{}
 	}
+	res.Reception.DataSource = w.DataSource
 	if !add(w.receptions, res.Reception, w.Now()) {
 		return false
 	}
 	if res.Advert != nil {
-		add(w.adverts, *res.Advert, w.Now())
+		a := *res.Advert
+		a.DataSource = w.DataSource
+		add(w.adverts, a, w.Now())
 	}
 	return true
 }

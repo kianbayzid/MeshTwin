@@ -20,7 +20,7 @@ import (
 )
 
 // SchemaVersion is written into every row. Bump it with schema/schema.json.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Reception is one row of the receptions table. Field order and tags must
 // match schema/schema.json; TestSchemaMatchesJSON enforces it.
@@ -43,6 +43,7 @@ type Reception struct {
 	PayloadLen     int16     `parquet:"payload_len"`
 	SrcID          *string   `parquet:"src_id,optional"`
 	DstID          *string   `parquet:"dst_id,optional"`
+	DataSource     string    `parquet:"data_source,dict"` // live | replay | synthetic; set by Writer
 }
 
 // Advert is one row of the adverts table.
@@ -59,6 +60,7 @@ type Advert struct {
 	AdvertTime    time.Time `parquet:"advert_time,timestamp(millisecond:utc)"`
 	Lat           *float64  `parquet:"lat,optional"` // exact: private bucket only (see CLAUDE.md, Privacy)
 	Lon           *float64  `parquet:"lon,optional"`
+	DataSource    string    `parquet:"data_source,dict"`
 }
 
 // Outcome classifies a message that produced no rows.

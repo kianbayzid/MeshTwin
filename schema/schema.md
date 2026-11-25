@@ -1,4 +1,4 @@
-# Parquet schema v1
+# Parquet schema v2
 
 `schema.json` is the machine-readable source of truth. The Go writer (Phase 2) and the Python
 reader (Phase 3) each have a test that fails if they drift from it. This file explains *why*
@@ -29,13 +29,14 @@ hour is the unit the hourly topology CronJob reads.
 | `snr_db`, `rssi_dbm` | last-hop link quality measured by the observer. Null if missing. |
 | `payload_len` | size only. **Payload bytes are not stored** (data minimization: they're ciphertext we have no business keeping) |
 | `src_id`, `dst_id` | plaintext endpoint ids where the payload exposes them: 64-hex full key (ADVERT/ANON_REQ source) or 2-hex prefix (V1 1-byte hash). Null otherwise. |
+| `data_source` | provenance: `live`, `replay` or `synthetic`, the ingester's `-mode`. The console must say whether a region shows real or generated data. Per row, not per file or region, so a bucket that mixes sources stays countable. Replay writes `replay`: a capture file does not record where it came from. Dictionary-encoded like `region`. Added in v2. |
 
 Not stored: transport codes (no analytic use yet), `score`, the JSON's redundant `path`/`route`/`len`.
 
 ## `adverts`: decoded public ADVERT fields, one row per reception
 
 Same key columns as `receptions`, plus `pubkey`, `name`, `role`, `advert_time` (sender clock, which is
-often wrong on nodes without GPS), and `lat`/`lon` at full precision or null.
+often wrong on nodes without GPS), `lat`/`lon` at full precision or null, and `data_source` (as in `receptions`).
 
 **Privacy:** `lat`/`lon` are exact here because the terrain model needs them. This bucket is private.
 Everything downstream that leaves the analytics layer (API, JSON summaries, map) snaps
@@ -48,4 +49,12 @@ latest advert per `pubkey`.
 - Row groups: target ~128 MB uncompressed or one hour, whichever comes first (tuned in Phase 2, with
   numbers in benchmarks.md).
 - Compression: zstd. Hex strings (`observer_id`, `path_hops`) are low-cardinality and dictionary-encode well.
-- Evolution: add nullable columns only and bump `schema_version`. Never repurpose a column.
+- Evolution: add columns only (at the end) and bump `schema_version`. Never repurpose a column.
+
+## Migrations
+
+**v1 → v2** (additive): `data_source` appended to both tables. It is non-null in every v2 file, but
+v1 files do not have the column at all, so readers must handle both: read with
+`union_by_name` (DuckDB `read_parquet(..., union_by_name = true)`), which yields null for v1 rows,
+and report those rows as `unknown`. v1 files are not rewritten; `testdata/parquet` stays v1 as the
+backward-compatibility case.

@@ -119,6 +119,10 @@ Console phases 1–6 are recorded in `docs/frontend.md`.
      `regions: [SEA, …]` + `bbox:` map per region → one ingester subscribed to every region's topic (`MQTT_TOPIC` is
      a comma list) and four CronJobs per region, `<release>-<region>-<job>`, labelled `meshtwin/region`. Same
      schedules for all regions, so N regions = N× the job load at each slot. Upgrading renames the CronJobs.
+   - Live vs synthetic, backend half: done (2026-11-25, verifier PASS). Parquet schema v2 adds `data_source`
+     (live | replay | synthetic, from the ingester's mode) to both tables; analytics reads v1 + v2 together (v1 rows
+     = `unknown`) and topology meta carries `data_sources` counts (`docs/api-contract.md`). `testdata/parquet` stays
+     v1 (the compatibility case) until regenerated. UI half next on `Frontend`.
 3. **City lookup.** Search a city in the console → its region code from a bundled airport list (no outside calls from
    the browser) → whether a feed carries that region → collection starts in the cluster (not from a public API button:
    the API stays read-only) → terrain fetched for the area → map once enough has been heard (hours, not instantly:

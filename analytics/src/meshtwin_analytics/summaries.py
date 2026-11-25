@@ -102,7 +102,7 @@ def topology_json(run: TopologyRun) -> dict[str, Any]:
         for a, b, le in _sorted_edges(run)
     ]
     return {
-        "meta": meta(run),
+        "meta": meta(run) | {"data_sources": run.counts.data_sources},
         "stats": {
             "receptions": run.counts.receptions,
             "flood_receptions": run.counts.flood_receptions,

@@ -180,7 +180,8 @@ func kindOf(v any) string {
 var (
 	intFields = []string{"degree", "observations", "samples", "nodes", "links", "receptions", "flood_receptions",
 		"observers", "unresolved_hops", "reachable_pairs", "reachable_pairs_lost", "nodes_cut_off", "rank",
-		"coverage_gain_nodes", "reachable_pairs_gained", "candidates_scored", "spofs_checked_top", "transmitters"}
+		"coverage_gain_nodes", "reachable_pairs_gained", "candidates_scored", "spofs_checked_top", "transmitters",
+		"live", "replay", "synthetic", "unknown"} // meta.data_sources row counts
 	unitFields = []string{"confidence", "score", "reachable_share", "reachable_share_after", "ambiguous_hop_share"}
 )
 

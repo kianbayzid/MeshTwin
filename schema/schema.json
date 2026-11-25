@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "partitioning": "{table}/region={region}/date={YYYY-MM-DD}/hour={HH}/",
   "tables": {
     "receptions": [
@@ -20,7 +20,8 @@
       {"name": "rssi_dbm",        "type": "int16",              "nullable": true},
       {"name": "payload_len",     "type": "int16",              "nullable": false},
       {"name": "src_id",          "type": "string",             "nullable": true},
-      {"name": "dst_id",          "type": "string",             "nullable": true}
+      {"name": "dst_id",          "type": "string",             "nullable": true},
+      {"name": "data_source",     "type": "string",             "nullable": false}
     ],
     "adverts": [
       {"name": "schema_version", "type": "int16",              "nullable": false},
@@ -34,7 +35,8 @@
       {"name": "role",           "type": "int8",               "nullable": false},
       {"name": "advert_time",    "type": "timestamp[ms, UTC]",  "nullable": false},
       {"name": "lat",            "type": "float64",            "nullable": true},
-      {"name": "lon",            "type": "float64",            "nullable": true}
+      {"name": "lon",            "type": "float64",            "nullable": true},
+      {"name": "data_source",    "type": "string",             "nullable": false}
     ]
   }
 }

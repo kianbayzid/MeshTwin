@@ -148,5 +148,50 @@ func TestWriterAdvertTable(t *testing.T) {
 	}
 }
 
+func TestWriterStampsDataSource(t *testing.T) {
+	for _, mode := range []string{"live", "replay", "synthetic"} {
+		t.Run(mode, func(t *testing.T) {
+			clock := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+			store := &memStore{}
+			w := newWriter(store, &clock)
+			w.DataSource = mode
+			res, err := Convert(msgRecord(t, topic, map[string]any{"raw": advertHex}))
+			if err != nil || res.Advert == nil {
+				t.Fatalf("advert not parsed: %v", err)
+			}
+			w.Add(res)
+			if _, err := w.Flush(context.Background(), true); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.files) != 2 {
+				t.Fatalf("files = %d, want receptions + adverts", len(store.files))
+			}
+			for k, v := range store.files {
+				var got []string
+				if strings.HasPrefix(k, "adverts/") {
+					rows, err := parquet.Read[Advert](bytes.NewReader(v), int64(len(v)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, r := range rows {
+						got = append(got, r.DataSource)
+					}
+				} else {
+					rows, err := parquet.Read[Reception](bytes.NewReader(v), int64(len(v)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, r := range rows {
+						got = append(got, r.DataSource)
+					}
+				}
+				if len(got) != 1 || got[0] != mode {
+					t.Errorf("%s: data_source = %v, want [%s]", k, got, mode)
+				}
+			}
+		})
+	}
+}
+
 // From docs/protocol.md, worked example.
 const advertHex = "110235340562C16BA4EFC9875477FAAEE55CD36645214BAFD526A0C77BED905022F920613981E66AE7F2512B04DCAC4A7BF718F07A579E1A417F6610C716D7911CF20FA579E6E9E570A35ED2C14F8828CDD452D78215870C31679681EADFE518DD057A25154723ED91906ED502B2B4B8F85345412D434D502D3032"
